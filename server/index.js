@@ -24,7 +24,7 @@ mongoose.connect(process.env.MONGO_URI, {
   useUnifiedTopology: true,
 }).then(() => console.log('MongoDB Atlas Connected Successfully')).catch(err => console.error('MongoDB Connection Error:', err));
 
-// Database Schemas for Cloud Persistence
+// Database Schemas with OverwriteModelError protection for cloud deployments
 const conversationSchema = new mongoose.Schema({
   messages: [{
     role: { type: String, required: true },
@@ -34,28 +34,27 @@ const conversationSchema = new mongoose.Schema({
   }],
   updatedAt: { type: Date, default: Date.now }
 });
-const Conversation = mongoose.model('Conversation', conversationSchema);
+const Conversation = mongoose.models.Conversation || mongoose.model('Conversation', conversationSchema);
 
 const memorySchema = new mongoose.Schema({
   fact: { type: String, required: true },
   createdAt: { type: Date, default: Date.now }
 });
-const Memory = mongoose.model('Memory', memorySchema);
+const Memory = mongoose.models.Memory || mongoose.model('Memory', memorySchema);
 
 const reminderSchema = new mongoose.Schema({
   text: { type: String, required: true },
   dueAt: { type: Date, required: true },
   delivered: { type: Boolean, default: false }
 });
-const Reminder = mongoose.model('Reminder', reminderSchema);
+const Reminder = mongoose.models.Reminder || mongoose.model('Reminder', reminderSchema);
 
 const noteSchema = new mongoose.Schema({
   text: { type: String, required: true },
   createdAt: { type: Date, default: Date.now }
 });
-const Note = mongoose.model('Note', noteSchema);
+const Note = mongoose.models.Note || mongoose.model('Note', noteSchema);
 
-// Helper helper functions replacing store.js for cloud persistence
 async function loadConversation() {
   let doc = await Conversation.findOne();
   if (!doc) {
@@ -407,7 +406,6 @@ app.post("/api/chat", async (req, res) => {
         try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
         const { functionResponse, action } = await runTool(tc.function.name, args);
         
-        // Save reminders/notes created via tools directly to MongoDB
         if (tc.function.name === 'set_reminder' && args.text && args.minutes) {
           const dueAt = new Date(Date.now() + args.minutes * 60000);
           await Reminder.create({ text: args.text, dueAt });

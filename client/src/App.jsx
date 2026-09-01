@@ -527,17 +527,17 @@ export default function App() {
       : "Tap talk or type below";
 
   return (
-    <div className="app">
+    <div className="app mobile-responsive-layout">
       <NeuronField state={state} />
 
-      <header>
+      <header className="mobile-header">
         <div className="brand">
           <h1>ARIA</h1>
           <span>your voice companion</span>
         </div>
         <div className="header-right">
           {activeProvider && (
-            <div className="provider-pill" title={`${configuredProviders.length} provider(s) configured`}>
+            <div className="provider-pill hidden sm:block" title={`${configuredProviders.length} provider(s) configured`}>
               ⚡ {activeProvider}
             </div>
           )}
@@ -549,12 +549,12 @@ export default function App() {
           </button>
           <div className="status-pill">
             <span className={`status-dot ${connected === false ? "offline" : state !== "idle" ? state : ""}`}></span>
-            <span>{connected === false ? "offline" : state}</span>
+            <span className="hidden sm:inline">{connected === false ? "offline" : state}</span>
           </div>
         </div>
       </header>
 
-      <main>
+      <main className="mobile-main-grid">
         <section className="orb-panel">
           <div className="orb-wrap">
             <div className={`orb-ring ${state === "listening" || state === "speaking" ? "active" : ""} ${state === "speaking" ? "speaking" : ""}`}></div>
@@ -579,7 +579,7 @@ export default function App() {
             <button onClick={onClearConversation}>🗑️ Clear conversation</button>
           </div>
 
-          <div className="hint">
+          <div className="hint hidden md:block">
             Try: <b>"Aria, what's the weather in Chennai"</b>, <b>"remind me to drink water in 20 minutes"</b>,
             <b> "open YouTube and play believer"</b>
           </div>
@@ -609,7 +609,7 @@ export default function App() {
         </section>
 
         {panelOpen && (
-          <aside className="side-panel">
+          <aside className="side-panel mobile-drawer">
             <div className="side-panel-header">
               <span>Your Aria</span>
               <button className="close-btn" onClick={() => setPanelOpen(false)}>✕</button>
