@@ -285,13 +285,10 @@ const Note =
 | AI PROVIDERS
 |--------------------------------------------------------------------------
 |
-| IMPORTANT:
+| ONE request at a time.
 |
-| The router does NOT broadcast requests.
-|
-| It chooses ONE model.
-|
-| Only when that model fails does it try a fallback.
+| A fallback is used ONLY when the previous
+| model actually failed.
 |
 |--------------------------------------------------------------------------
 */
@@ -327,10 +324,11 @@ const PROVIDERS = [
   /*
   GEMINI
 
-  IMPORTANT:
-  Do NOT put gemini-2.5-flash here.
+  Do NOT use gemini-2.5-flash
+  as your current default.
 
-  Your previous error came from that model.
+  Your previous Render error came from
+  that model.
   */
 
   {
@@ -547,18 +545,29 @@ function clearCooldown(
 |--------------------------------------------------------------------------
 | BUILD MODEL LIST
 |--------------------------------------------------------------------------
+|
+| Manual mode:
+| selected provider/model first.
+|
+| Auto mode:
+| last successful model first.
+|
+|--------------------------------------------------------------------------
 */
 
-function buildCandidates() {
+function buildCandidates(
+  preferredProvider = "auto",
+  preferredModel = "auto"
+) {
   const all = [];
 
-  for (const provider of PROVIDERS) {
-    for (const model of provider.models) {
+  for (const provider of
+    PROVIDERS) {
+    for (const model of
+      provider.models) {
       all.push({
         provider,
-
         model,
-
         key: candidateKey(
           provider,
           model
@@ -568,10 +577,50 @@ function buildCandidates() {
   }
 
   /*
-  Prefer the model that worked last.
+  MANUAL MODE
   */
 
-  if (lastSuccessfulCandidate) {
+  if (
+    preferredProvider &&
+    preferredProvider !==
+      "auto"
+  ) {
+    const selected =
+      all.filter(
+        (candidate) =>
+          candidate.provider.id ===
+            preferredProvider &&
+          (
+            preferredModel ===
+              "auto" ||
+            candidate.model ===
+              preferredModel
+          )
+      );
+
+    const rest =
+      all.filter(
+        (candidate) =>
+          !selected.some(
+            (item) =>
+              item.key ===
+              candidate.key
+          )
+      );
+
+    return [
+      ...selected,
+      ...rest,
+    ];
+  }
+
+  /*
+  AUTO MODE
+  */
+
+  if (
+    lastSuccessfulCandidate
+  ) {
     const index =
       all.findIndex(
         (candidate) =>
@@ -580,9 +629,7 @@ function buildCandidates() {
       );
 
     if (index >= 0) {
-      const [
-        preferred,
-      ] =
+      const [preferred] =
         all.splice(
           index,
           1
@@ -593,10 +640,6 @@ function buildCandidates() {
       );
     }
   }
-
-  /*
-  Healthy models first.
-  */
 
   const healthy =
     all.filter(
@@ -629,9 +672,10 @@ function buildCandidates() {
 function classifyError(
   error
 ) {
-  const status = Number(
-    error?.status || 0
-  );
+  const status =
+    Number(
+      error?.status || 0
+    );
 
   const message =
     String(
@@ -639,10 +683,18 @@ function classifyError(
     ).toLowerCase();
 
   /*
-  Rate limit.
+  429 = rate limit
   */
 
-  if (status === 429) {
+  if (
+    status === 429 ||
+    message.includes(
+      "rate limit"
+    ) ||
+    message.includes(
+      "quota"
+    )
+  ) {
     return {
       retry: true,
 
@@ -655,7 +707,7 @@ function classifyError(
   }
 
   /*
-  Temporary provider errors.
+  Temporary provider failure
   */
 
   if (
@@ -676,7 +728,7 @@ function classifyError(
   }
 
   /*
-  Timeout.
+  Timeout
   */
 
   if (
@@ -696,13 +748,12 @@ function classifyError(
       cooldown:
         TEMPORARY_ERROR_COOLDOWN,
 
-      reason:
-        "timeout",
+      reason: "timeout",
     };
   }
 
   /*
-  Invalid/unavailable model.
+  Invalid/removed model
   */
 
   if (
@@ -732,7 +783,7 @@ function classifyError(
   }
 
   /*
-  Authentication error.
+  Authentication
   */
 
   if (
@@ -751,7 +802,8 @@ function classifyError(
   }
 
   /*
-  Unknown provider failure.
+  Unknown failure.
+  One fallback is still allowed.
   */
 
   return {
@@ -767,7 +819,7 @@ function classifyError(
 
 /*
 |--------------------------------------------------------------------------
-| OPENAI COMPATIBLE
+| OPENAI-COMPATIBLE REQUEST
 |--------------------------------------------------------------------------
 */
 
@@ -802,8 +854,10 @@ async function callOpenAICompatible(
                 ]
               }`,
 
-            ...(provider.extraHeaders ||
-              {}),
+            ...(
+              provider.extraHeaders ||
+              {}
+            ),
           },
 
           body: JSON.stringify({
@@ -981,9 +1035,11 @@ function toGeminiMessages(
 ) {
   const result = [];
 
-  for (const message of messages) {
+  for (const message of
+    messages) {
     /*
-    System messages are handled separately.
+    System messages are handled
+    separately.
     */
 
     if (
@@ -994,7 +1050,7 @@ function toGeminiMessages(
     }
 
     /*
-    User.
+    User
     */
 
     if (
@@ -1017,7 +1073,7 @@ function toGeminiMessages(
     }
 
     /*
-    Assistant.
+    Assistant
     */
 
     if (
@@ -1026,16 +1082,20 @@ function toGeminiMessages(
     ) {
       const parts = [];
 
-      if (message.content) {
+      if (
+        message.content
+      ) {
         parts.push({
           text:
             message.content,
         });
       }
 
-      for (const call of
-        message.tool_calls ||
-        []) {
+      for (
+        const call of
+          message.tool_calls ||
+          []
+      ) {
         let args = {};
 
         try {
@@ -1049,6 +1109,8 @@ function toGeminiMessages(
 
         parts.push({
           functionCall: {
+            id: call.id,
+
             name:
               call.function
                 .name,
@@ -1058,7 +1120,7 @@ function toGeminiMessages(
         });
       }
 
-      if (parts.length > 0) {
+      if (parts.length) {
         result.push({
           role: "model",
 
@@ -1070,7 +1132,7 @@ function toGeminiMessages(
     }
 
     /*
-    Tool result.
+    Tool result
     */
 
     if (
@@ -1099,6 +1161,9 @@ function toGeminiMessages(
         parts: [
           {
             functionResponse: {
+              id:
+                message.tool_call_id,
+
               name:
                 message.name ||
                 "unknown_tool",
@@ -1184,6 +1249,12 @@ async function callGemini(
                   geminiFunctionDeclarations(),
               },
             ],
+
+            /*
+            Gemini 3.x:
+            don't send deprecated
+            sampling parameters.
+            */
 
             generationConfig: {
               maxOutputTokens: 900,
@@ -1349,26 +1420,31 @@ async function callModel(
 |
 | VERY IMPORTANT:
 |
-| Request:
+| First request:
+|     one model only.
 |
-|     Model A
-|       |
-|       +-- success --> STOP
-|       |
-|       +-- failure --> Model B
-|                          |
-|                          +-- success --> STOP
+| If success:
+|     STOP.
 |
-| The same request is NOT sent to all providers.
+| If retryable failure:
+|     next model.
+|
+| Never broadcast one request to all
+| models simultaneously.
 |
 |--------------------------------------------------------------------------
 */
 
 async function callAI(
-  messages
+  messages,
+  preferredProvider = "auto",
+  preferredModel = "auto"
 ) {
   const candidates =
-    buildCandidates();
+    buildCandidates(
+      preferredProvider,
+      preferredModel
+    );
 
   if (
     candidates.length ===
@@ -1376,7 +1452,7 @@ async function callAI(
   ) {
     const error =
       new Error(
-        "No AI provider is configured on the server."
+        "No AI provider/model is configured on the server."
       );
 
     error.status = 500;
@@ -1385,15 +1461,6 @@ async function callAI(
   }
 
   let lastError = null;
-
-  /*
-  Maximum fallback attempts.
-
-  Default = 3.
-
-  This prevents a request from
-  hitting every possible provider.
-  */
 
   const maxAttempts =
     Math.min(
@@ -1405,25 +1472,21 @@ async function callAI(
       )
     );
 
-  /*
-  Remember which candidate we started with.
-  */
-
   const startingCandidate =
     candidates[0];
 
   for (
     let attempt = 0;
-    attempt < maxAttempts;
+    attempt <
+    maxAttempts;
     attempt++
   ) {
     const candidate =
       candidates[attempt];
 
     /*
-    If candidate is cooling down,
-    skip it while healthy candidates
-    are available.
+    Skip cooling model when a healthy
+    candidate exists.
     */
 
     if (
@@ -1456,9 +1519,8 @@ async function callAI(
         );
 
       /*
-      SUCCESS.
-
-      Stop immediately.
+      SUCCESS:
+      do NOT call any more models.
       */
 
       lastSuccessfulCandidate =
@@ -1482,13 +1544,8 @@ async function callAI(
         model:
           candidate.model,
 
-        /*
-        TRUE only if we had to move
-        away from the initial candidate.
-        */
-
         switched:
-          attempt > 0 &&
+          attempt > 0 ||
           startingCandidate.key !==
             candidate.key,
       };
@@ -1503,7 +1560,6 @@ async function callAI(
 
       setCooldown(
         candidate.key,
-
         classification.cooldown
       );
 
@@ -1516,8 +1572,8 @@ async function callAI(
       );
 
       /*
-      Continue only because the
-      current provider failed.
+      Next model ONLY because this
+      model failed.
       */
     }
   }
@@ -1565,11 +1621,11 @@ Be natural, friendly, accurate and concise.
 Rules:
 
 - Answer the user's actual question directly.
-- Do not mention internal model routing unless necessary.
+- Do not mention internal routing unless necessary.
 - Do not invent tool results.
-- Use a tool only when the user actually needs that tool.
+- Use tools only when genuinely needed.
 - Do not call tools unnecessarily.
-- If the user asks a normal conversational, educational, coding, reasoning or general question, answer normally.
+- Normal conversation should be answered normally.
 - If the user explicitly asks for a reminder, use set_reminder.
 - If the user explicitly asks to save a note, use save_note.
 - If the user explicitly asks you to remember something, use remember_fact.
@@ -1577,10 +1633,10 @@ Rules:
 - Use calculate for calculations.
 - Use open_app_or_url only when the user explicitly asks to open something.
 - Use search_web only when external/current information is actually required.
-- After a tool succeeds, give a natural confirmation.
-- Never claim to have performed an action that wasn't actually performed.
-- Keep normal responses concise unless the user requests detail.
-- For explanations, structure the answer clearly so it works well both as text and spoken audio.
+- After a successful tool, give a natural confirmation.
+- Never claim an action happened if it did not happen.
+- Keep normal responses concise unless the user asks for detail.
+- Structure explanations so they sound natural when read aloud.
 
 ${memoryText}
 `;
@@ -1657,46 +1713,73 @@ async function saveConversation(
 |--------------------------------------------------------------------------
 */
 
+function healthPayload() {
+  return {
+    ok: true,
+
+    service:
+      "aria-api",
+
+    database:
+      mongoReady
+        ? "connected"
+        : "disconnected",
+
+    configuredProviders:
+      PROVIDERS.map(
+        (provider) => ({
+          id:
+            provider.id,
+
+          name:
+            provider.id,
+
+          models:
+            provider.models,
+        })
+      ),
+
+    lastUsed:
+      lastSuccessfulCandidate
+        ? `${lastSuccessfulCandidate.provider.id}/${lastSuccessfulCandidate.model}`
+        : null,
+
+    maxAIAttempts:
+      Number(
+        process.env.MAX_AI_ATTEMPTS ||
+          3
+      ),
+
+    timestamp:
+      new Date().toISOString(),
+  };
+}
+
 app.get(
   "/health",
-  async (req, res) => {
-    res.json({
-      ok: true,
+  (req, res) => {
+    res.json(
+      healthPayload()
+    );
+  }
+);
 
-      service:
-        "aria-api",
+/*
+Mobile/client compatibility.
+*/
 
-      database:
-        mongoReady
-          ? "connected"
-          : "disconnected",
-
-      configuredProviders:
-        PROVIDERS.map(
-          (provider) =>
-            provider.id
-        ),
-
-      lastUsed:
-        lastSuccessfulCandidate
-          ? `${lastSuccessfulCandidate.provider.id}/${lastSuccessfulCandidate.model}`
-          : null,
-
-      maxAIAttempts:
-        Number(
-          process.env.MAX_AI_ATTEMPTS ||
-            3
-        ),
-
-      timestamp:
-        new Date().toISOString(),
-    });
+app.get(
+  "/api/health",
+  (req, res) => {
+    res.json(
+      healthPayload()
+    );
   }
 );
 
 /*
 |--------------------------------------------------------------------------
-| CONVERSATION API
+| CONVERSATION
 |--------------------------------------------------------------------------
 */
 
@@ -2043,6 +2126,22 @@ app.post(
           ? req.body.message.trim()
           : "";
 
+      const preferredProvider =
+        typeof req.body
+          ?.preferredProvider ===
+        "string"
+          ? req.body
+              .preferredProvider
+          : "auto";
+
+      const preferredModel =
+        typeof req.body
+          ?.preferredModel ===
+        "string"
+          ? req.body
+              .preferredModel
+          : "auto";
+
       if (!userMessage) {
         return res.status(400).json({
           error:
@@ -2071,7 +2170,9 @@ app.post(
       }
 
       /*
-      Load memory.
+      Load shared memory.
+
+      EVERY model receives the same memory.
       */
 
       const memoryFacts =
@@ -2091,17 +2192,13 @@ app.post(
       const history =
         await loadConversation();
 
-      /*
-      Keep history under control.
-      */
-
       const trimmedHistory =
         history.slice(
           -HISTORY_WINDOW
         );
 
       /*
-      Build model messages.
+      Initial model messages.
       */
 
       let messages = [
@@ -2137,14 +2234,17 @@ app.post(
       /*
       Tool loop.
 
-      One model request is made.
+      A model gets the request.
 
-      If it asks for a tool:
+      If it requests a tool:
         execute tool
-        send tool result back
+        return result to model
 
-      It does not broadcast the original
-      request to all models.
+      If model fails:
+        callAI() performs fallback.
+
+      We never send the original request
+      to every model at the same time.
       */
 
       for (
@@ -2155,7 +2255,9 @@ app.post(
       ) {
         const result =
           await callAI(
-            messages
+            messages,
+            preferredProvider,
+            preferredModel
           );
 
         providerId =
@@ -2175,7 +2277,7 @@ app.post(
           [];
 
         /*
-        Normal answer.
+        Normal response.
         */
 
         if (
@@ -2192,8 +2294,7 @@ app.post(
         }
 
         /*
-        Add assistant message with
-        tool calls.
+        Add assistant tool call.
         */
 
         messages.push({
@@ -2208,10 +2309,11 @@ app.post(
         });
 
         /*
-        Execute each requested tool.
+        Execute tools.
         */
 
-        for (const toolCall of toolCalls) {
+        for (const toolCall of
+          toolCalls) {
           const toolName =
             toolCall?.function
               ?.name;
@@ -2221,8 +2323,7 @@ app.post(
           try {
             args =
               JSON.parse(
-                toolCall
-                  ?.function
+                toolCall?.function
                   ?.arguments ||
                   "{}"
               );
@@ -2317,8 +2418,7 @@ app.post(
           }
 
           /*
-          Send tool result back
-          to the model.
+          Tool result sent to model.
           */
 
           messages.push({
@@ -2346,9 +2446,6 @@ app.post(
 
       /*
       Save conversation.
-
-      Only user/final assistant messages
-      are persisted for clean history.
       */
 
       const newHistory = [
@@ -2384,6 +2481,8 @@ app.post(
       );
 
       res.json({
+        ok: true,
+
         reply:
           finalText,
 
@@ -2422,6 +2521,8 @@ app.post(
           : 500;
 
       res.status(status).json({
+        ok: false,
+
         error:
           error.message ||
           "Aria failed to process the request.",
@@ -2443,6 +2544,8 @@ app.post(
 app.use(
   (req, res) => {
     res.status(404).json({
+      ok: false,
+
       error:
         `Route not found: ${req.method} ${req.path}`,
     });
@@ -2476,6 +2579,8 @@ app.use(
     }
 
     res.status(500).json({
+      ok: false,
+
       error:
         "Internal server error.",
     });
@@ -2484,7 +2589,7 @@ app.use(
 
 /*
 |--------------------------------------------------------------------------
-| START SERVER
+| START
 |--------------------------------------------------------------------------
 */
 

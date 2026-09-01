@@ -3,16 +3,18 @@ import { useEffect, useRef, useState } from "react";
 const API_STORAGE_KEY = "aria_server_url";
 
 function getApiBase() {
+  const envUrl = import.meta.env.VITE_API_URL;
+
+  // In production, prefer the Vercel build-time environment variable.
+  // This prevents an old/stale localStorage URL from breaking mobile.
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, "");
+  }
+
   const saved = localStorage.getItem(API_STORAGE_KEY);
 
   if (saved) {
     return saved.replace(/\/+$/, "");
-  }
-
-  const envUrl = import.meta.env.VITE_API_URL;
-
-  if (envUrl) {
-    return envUrl.replace(/\/+$/, "");
   }
 
   if (
@@ -37,12 +39,92 @@ function openUrl(url) {
 
 /*
 |--------------------------------------------------------------------------
+| ARIA VOICES
+|--------------------------------------------------------------------------
+|
+| These are voice profiles.
+| The browser chooses the closest installed English voice.
+|
+*/
+
+const ARIA_VOICES = [
+  {
+    id: "female-warm",
+    name: "Aria",
+    gender: "Female",
+    description: "Warm & friendly",
+    rate: 0.98,
+    pitch: 1.08,
+    keywords: [
+      "samantha",
+      "zira",
+      "female",
+      "woman",
+      "google us english",
+    ],
+  },
+
+  {
+    id: "female-calm",
+    name: "Nova",
+    gender: "Female",
+    description: "Calm & soft",
+    rate: 0.91,
+    pitch: 1.18,
+    keywords: [
+      "susan",
+      "hazel",
+      "female",
+      "woman",
+    ],
+  },
+
+  {
+    id: "male-deep",
+    name: "Atlas",
+    gender: "Male",
+    description: "Deep & confident",
+    rate: 0.92,
+    pitch: 0.72,
+    keywords: [
+      "david",
+      "mark",
+      "male",
+      "man",
+    ],
+  },
+
+  {
+    id: "male-clear",
+    name: "Orion",
+    gender: "Male",
+    description: "Clear & natural",
+    rate: 1.0,
+    pitch: 0.9,
+    keywords: [
+      "alex",
+      "daniel",
+      "male",
+      "man",
+    ],
+  },
+];
+
+function getStoredString(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
 | LOCAL COMMANDS
 |--------------------------------------------------------------------------
 |
-| These commands NEVER go to an LLM.
-|
-| This prevents unnecessary API usage.
+| These commands are intentionally handled locally.
+| They DO NOT consume an LLM request.
 |
 */
 
@@ -64,7 +146,11 @@ function runLocalCommand(text) {
         .replace(/%/g, "/100")
         .trim();
 
-      if (!/^[0-9+\-*/().\s]+$/.test(expression)) {
+      if (
+        !/^[0-9+\-*/().\s]+$/.test(
+          expression
+        )
+      ) {
         return null;
       }
 
@@ -80,7 +166,8 @@ function runLocalCommand(text) {
       }
     } catch {
       return {
-        reply: "I couldn't calculate that expression.",
+        reply:
+          "I couldn't calculate that expression.",
         local: true,
       };
     }
@@ -97,10 +184,13 @@ function runLocalCommand(text) {
     lower === "time"
   ) {
     return {
-      reply: `It's ${new Date().toLocaleTimeString([], {
-        hour: "numeric",
-        minute: "2-digit",
-      })}.`,
+      reply: `It's ${new Date().toLocaleTimeString(
+        [],
+        {
+          hour: "numeric",
+          minute: "2-digit",
+        }
+      )}.`,
       local: true,
     };
   }
@@ -112,15 +202,19 @@ function runLocalCommand(text) {
   if (
     lower === "what date is it" ||
     lower === "today's date" ||
-    lower === "what is today's date"
+    lower ===
+      "what is today's date"
   ) {
     return {
-      reply: `Today is ${new Date().toLocaleDateString([], {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      })}.`,
+      reply: `Today is ${new Date().toLocaleDateString(
+        [],
+        {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }
+      )}.`,
       local: true,
     };
   }
@@ -143,25 +237,39 @@ function runLocalCommand(text) {
       google: "https://www.google.com",
       gmail: "https://mail.google.com",
       github: "https://github.com",
-      linkedin: "https://www.linkedin.com",
-      instagram: "https://www.instagram.com",
-      facebook: "https://www.facebook.com",
-      whatsapp: "https://web.whatsapp.com",
+      linkedin:
+        "https://www.linkedin.com",
+      instagram:
+        "https://www.instagram.com",
+      facebook:
+        "https://www.facebook.com",
+      whatsapp:
+        "https://web.whatsapp.com",
       reddit: "https://www.reddit.com",
-      spotify: "https://open.spotify.com",
-      netflix: "https://www.netflix.com",
-      amazon: "https://www.amazon.in",
-      flipkart: "https://www.flipkart.com",
+      spotify:
+        "https://open.spotify.com",
+      netflix:
+        "https://www.netflix.com",
+      amazon:
+        "https://www.amazon.in",
+      flipkart:
+        "https://www.flipkart.com",
       maps: "https://maps.google.com",
-      "google maps": "https://maps.google.com",
-      drive: "https://drive.google.com",
-      calendar: "https://calendar.google.com",
-      leetcode: "https://leetcode.com",
-      chatgpt: "https://chatgpt.com",
+      "google maps":
+        "https://maps.google.com",
+      drive:
+        "https://drive.google.com",
+      calendar:
+        "https://calendar.google.com",
+      leetcode:
+        "https://leetcode.com",
+      chatgpt:
+        "https://chatgpt.com",
     };
 
     if (sites[target]) {
-      const success = openUrl(sites[target]);
+      const success =
+        openUrl(sites[target]);
 
       return {
         reply: success
@@ -171,10 +279,15 @@ function runLocalCommand(text) {
       };
     }
 
-    if (/^[a-z0-9-]+\.[a-z]{2,}$/i.test(target)) {
+    if (
+      /^[a-z0-9-]+\.[a-z]{2,}$/i.test(
+        target
+      )
+    ) {
       const url = `https://${target}`;
 
-      const success = openUrl(url);
+      const success =
+        openUrl(url);
 
       return {
         reply: success
@@ -200,7 +313,8 @@ function runLocalCommand(text) {
       `https://www.google.com/search?q=` +
       encodeURIComponent(query);
 
-    const success = openUrl(url);
+    const success =
+      openUrl(url);
 
     return {
       reply: success
@@ -219,13 +333,15 @@ function runLocalCommand(text) {
   );
 
   if (match) {
-    const query = match[1].trim();
+    const query =
+      match[1].trim();
 
     const url =
       `https://www.youtube.com/results?search_query=` +
       encodeURIComponent(query);
 
-    const success = openUrl(url);
+    const success =
+      openUrl(url);
 
     return {
       reply: success
@@ -245,8 +361,11 @@ function runLocalCommand(text) {
 */
 
 function Message({ message }) {
-  const isUser = message.role === "user";
-  const isSystem = message.role === "system";
+  const isUser =
+    message.role === "user";
+
+  const isSystem =
+    message.role === "system";
 
   return (
     <div
@@ -269,7 +388,9 @@ function Message({ message }) {
       >
         {!isUser && (
           <div className="message-label">
-            {isSystem ? "SYSTEM" : "ARIA"}
+            {isSystem
+              ? "SYSTEM"
+              : "ARIA"}
           </div>
         )}
 
@@ -277,11 +398,13 @@ function Message({ message }) {
           {message.content}
         </div>
 
-        {!isUser && message.provider && (
-          <div className="message-meta">
-            {message.provider}/{message.model}
-          </div>
-        )}
+        {!isUser &&
+          message.provider && (
+            <div className="message-meta">
+              {message.provider}/
+              {message.model}
+            </div>
+          )}
       </div>
     </div>
   );
@@ -294,7 +417,10 @@ function Message({ message }) {
 */
 
 export default function App() {
-  const [messages, setMessages] = useState([
+  const [
+    messages,
+    setMessages,
+  ] = useState([
     {
       role: "assistant",
       content:
@@ -302,52 +428,124 @@ export default function App() {
     },
   ]);
 
-  const [input, setInput] = useState("");
+  const [
+    input,
+    setInput,
+  ] = useState("");
 
-  const [busy, setBusy] = useState(false);
+  const [
+    busy,
+    setBusy,
+  ] = useState(false);
 
-  const [connected, setConnected] =
-    useState(false);
+  const [
+    connected,
+    setConnected,
+  ] = useState(false);
 
-  const [health, setHealth] =
-    useState(null);
+  const [
+    health,
+    setHealth,
+  ] = useState(null);
 
-  const [sidebarOpen, setSidebarOpen] =
-    useState(false);
+  const [
+    sidebarOpen,
+    setSidebarOpen,
+  ] = useState(false);
 
-  const [settingsOpen, setSettingsOpen] =
-    useState(false);
+  const [
+    settingsOpen,
+    setSettingsOpen,
+  ] = useState(false);
 
-  const [serverUrl, setServerUrl] =
-    useState(getApiBase());
+  const [
+    serverUrl,
+    setServerUrl,
+  ] = useState(getApiBase());
 
-  const [reminders, setReminders] =
-    useState([]);
+  const [
+    reminders,
+    setReminders,
+  ] = useState([]);
 
-  const [notes, setNotes] =
-    useState([]);
+  const [
+    notes,
+    setNotes,
+  ] = useState([]);
 
-  const [memory, setMemory] =
-    useState([]);
+  const [
+    memory,
+    setMemory,
+  ] = useState([]);
 
-  const [panel, setPanel] =
-    useState("reminders");
+  const [
+    panel,
+    setPanel,
+  ] = useState("reminders");
 
   /*
-  Voice settings
+  Model selection
   */
 
-  const [voiceEnabled, setVoiceEnabled] =
-    useState(true);
+  const [
+    selectedProvider,
+    setSelectedProvider,
+  ] = useState(() =>
+    getStoredString(
+      "aria_selected_provider",
+      "auto"
+    )
+  );
 
-  const [continuousVoice, setContinuousVoice] =
-    useState(false);
+  const [
+    selectedModel,
+    setSelectedModel,
+  ] = useState(() =>
+    getStoredString(
+      "aria_selected_model",
+      "auto"
+    )
+  );
 
-  const [listening, setListening] =
-    useState(false);
+  /*
+  Voice
+  */
 
-  const [speaking, setSpeaking] =
-    useState(false);
+  const [
+    selectedVoice,
+    setSelectedVoice,
+  ] = useState(() =>
+    getStoredString(
+      "aria_selected_voice",
+      "female-warm"
+    )
+  );
+
+  const [
+    voiceEnabled,
+    setVoiceEnabled,
+  ] = useState(
+    () =>
+      getStoredString(
+        "aria_voice_enabled",
+        "true"
+      ) === "true"
+  );
+
+  const [
+    continuousVoice,
+    setContinuousVoice,
+  ] = useState(false);
+
+  const [
+    listening,
+    setListening,
+  ] = useState(false);
+
+  const [
+    speaking,
+    setSpeaking,
+  ] = useState(false);
 
   const messagesEndRef =
     useRef(null);
@@ -364,15 +562,25 @@ export default function App() {
   const busyRef =
     useRef(false);
 
+  const speakingRef =
+    useRef(false);
+
+  const selectedVoiceRef =
+    useRef(selectedVoice);
+
+  const voiceEnabledRef =
+    useRef(voiceEnabled);
+
   const speechSupported =
-    typeof window !== "undefined" &&
+    typeof window !==
+      "undefined" &&
     Boolean(
       window.SpeechRecognition ||
         window.webkitSpeechRecognition
     );
 
   /*
-  Keep refs synchronized.
+  Sync refs
   */
 
   useEffect(() => {
@@ -381,22 +589,68 @@ export default function App() {
   }, [continuousVoice]);
 
   useEffect(() => {
-    busyRef.current = busy;
+    busyRef.current =
+      busy;
   }, [busy]);
+
+  useEffect(() => {
+    selectedVoiceRef.current =
+      selectedVoice;
+  }, [selectedVoice]);
+
+  useEffect(() => {
+    voiceEnabledRef.current =
+      voiceEnabled;
+  }, [voiceEnabled]);
+
+  /*
+  Persist local settings.
+  */
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "aria_selected_provider",
+        selectedProvider
+      );
+
+      localStorage.setItem(
+        "aria_selected_model",
+        selectedModel
+      );
+
+      localStorage.setItem(
+        "aria_selected_voice",
+        selectedVoice
+      );
+
+      localStorage.setItem(
+        "aria_voice_enabled",
+        String(voiceEnabled)
+      );
+    } catch {}
+  }, [
+    selectedProvider,
+    selectedModel,
+    selectedVoice,
+    voiceEnabled,
+  ]);
 
   /*
   Auto-scroll.
   */
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
+    messagesEndRef.current?.scrollIntoView(
+      {
+        behavior: "smooth",
+        block: "end",
+      }
+    );
   }, [messages, busy]);
 
   /*
-  Initial loading.
+  Initial startup.
   */
 
   useEffect(() => {
@@ -406,62 +660,107 @@ export default function App() {
     return () => {
       stopVoiceRecognition();
 
-      if (window.speechSynthesis) {
+      if (
+        window.speechSynthesis
+      ) {
         window.speechSynthesis.cancel();
       }
     };
   }, []);
 
   /*
-  Health check
+  Load backend health.
   */
 
   async function checkHealth() {
-    const base = getApiBase();
+    const base =
+      getApiBase();
+
+    console.log(
+      "[ARIA] API base:",
+      base
+    );
 
     if (!base) {
       setConnected(false);
-      setHealth(null);
+
+      setHealth({
+        ok: false,
+
+        error:
+          "VITE_API_URL is missing.",
+      });
+
       return;
     }
 
     try {
-      const response = await fetch(
-        `${base}/health`,
-        {
-          cache: "no-store",
-        }
-      );
+      const response =
+        await fetch(
+          `${base}/health`,
+          {
+            cache: "no-store",
+          }
+        );
 
-      if (!response.ok) {
+      const raw =
+        await response.text();
+
+      let data = {};
+
+      try {
+        data =
+          JSON.parse(raw);
+      } catch {
         throw new Error(
-          `Health check failed: ${response.status}`
+          `Backend returned invalid JSON (${response.status}).`
         );
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            `Health request failed with HTTP ${response.status}.`
+        );
+      }
+
+      console.log(
+        "[ARIA] Backend health:",
+        data
+      );
 
       setHealth(data);
-      setConnected(Boolean(data.ok));
+
+      setConnected(
+        Boolean(data.ok)
+      );
     } catch (error) {
       console.error(
-        "Health check error:",
+        "[ARIA] Health error:",
         error
       );
 
       setConnected(false);
-      setHealth(null);
+
+      setHealth({
+        ok: false,
+        error:
+          error.message,
+      });
     }
   }
 
   /*
-  Load MongoDB data.
+  Load MongoDB-backed data.
   */
 
   async function loadData() {
-    const base = getApiBase();
+    const base =
+      getApiBase();
 
-    if (!base) return;
+    if (!base) {
+      return;
+    }
 
     const endpoints = [
       `${base}/api/conversation`,
@@ -472,16 +771,19 @@ export default function App() {
 
     const results =
       await Promise.allSettled(
-        endpoints.map((url) =>
-          fetch(url).then((response) => {
+        endpoints.map(
+          async (url) => {
+            const response =
+              await fetch(url);
+
             if (!response.ok) {
               throw new Error(
-                `${response.status}`
+                `HTTP ${response.status}`
               );
             }
 
             return response.json();
-          })
+          }
         )
       );
 
@@ -490,7 +792,8 @@ export default function App() {
       "fulfilled"
     ) {
       const stored =
-        results[0].value?.messages || [];
+        results[0].value?.messages ||
+        [];
 
       if (stored.length > 0) {
         setMessages([
@@ -509,7 +812,8 @@ export default function App() {
       "fulfilled"
     ) {
       setReminders(
-        results[1].value?.reminders || []
+        results[1].value
+          ?.reminders || []
       );
     }
 
@@ -518,7 +822,8 @@ export default function App() {
       "fulfilled"
     ) {
       setNotes(
-        results[2].value?.notes || []
+        results[2].value?.notes ||
+          []
       );
     }
 
@@ -527,47 +832,59 @@ export default function App() {
       "fulfilled"
     ) {
       setMemory(
-        results[3].value?.facts || []
+        results[3].value?.facts ||
+          []
       );
     }
   }
 
   /*
-  Send message to backend.
+  Send request to Render.
   */
 
-  async function sendToBackend(text) {
-    const base = getApiBase();
+  async function sendToBackend(
+    text
+  ) {
+    const base =
+      getApiBase();
 
     if (!base) {
       throw new Error(
-        "Backend URL is not configured."
+        "Backend URL is not configured. Check VITE_API_URL on Vercel."
       );
     }
 
-    const response = await fetch(
-      `${base}/api/chat`,
-      {
-        method: "POST",
+    const response =
+      await fetch(
+        `${base}/api/chat`,
+        {
+          method: "POST",
 
-        headers: {
-          "Content-Type":
-            "application/json",
-        },
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
 
-        body: JSON.stringify({
-          message: text,
-        }),
-      }
-    );
+          body: JSON.stringify({
+            message: text,
+
+            preferredProvider:
+              selectedProvider,
+
+            preferredModel:
+              selectedModel,
+          }),
+        }
+      );
 
     let data = {};
 
     try {
-      data = await response.json();
+      data =
+        await response.json();
     } catch {
       throw new Error(
-        `Server returned HTTP ${response.status} with an invalid response.`
+        `Server returned HTTP ${response.status} without valid JSON.`
       );
     }
 
@@ -582,12 +899,35 @@ export default function App() {
   }
 
   /*
-  Speak AI response.
+  Load available voices.
   */
 
-  function speak(text) {
+  function getBrowserVoices() {
     if (
-      !voiceEnabled ||
+      !window.speechSynthesis
+    ) {
+      return [];
+    }
+
+    return window.speechSynthesis.getVoices();
+  }
+
+  /*
+  Speak text.
+
+  force=true is used for:
+  "explain by voice"
+  "read this aloud"
+  etc.
+  */
+
+  function speak(
+    text,
+    force = false
+  ) {
+    if (
+      (!voiceEnabledRef.current &&
+        !force) ||
       !window.speechSynthesis ||
       !text
     ) {
@@ -596,23 +936,99 @@ export default function App() {
 
     window.speechSynthesis.cancel();
 
-    const utterance =
-      new SpeechSynthesisUtterance(text);
+    const voices =
+      getBrowserVoices();
 
-    utterance.rate = 1;
-    utterance.pitch = 1;
+    const profile =
+      ARIA_VOICES.find(
+        (voice) =>
+          voice.id ===
+          selectedVoiceRef.current
+      ) ||
+      ARIA_VOICES[0];
+
+    let browserVoice = null;
+
+    /*
+    Find preferred voice.
+    */
+
+    for (
+      const keyword of
+        profile.keywords
+    ) {
+      browserVoice =
+        voices.find(
+          (voice) =>
+            voice.lang
+              ?.toLowerCase()
+              .startsWith("en") &&
+            voice.name
+              ?.toLowerCase()
+              .includes(
+                keyword.toLowerCase()
+              )
+        );
+
+      if (browserVoice) {
+        break;
+      }
+    }
+
+    /*
+    Fallback to any English voice.
+    */
+
+    if (!browserVoice) {
+      browserVoice =
+        voices.find(
+          (voice) =>
+            voice.lang
+              ?.toLowerCase()
+              .startsWith("en")
+        );
+    }
+
+    const utterance =
+      new SpeechSynthesisUtterance(
+        text
+      );
+
+    if (browserVoice) {
+      utterance.voice =
+        browserVoice;
+
+      utterance.lang =
+        browserVoice.lang;
+    } else {
+      utterance.lang =
+        "en-US";
+    }
+
+    utterance.rate =
+      profile.rate;
+
+    utterance.pitch =
+      profile.pitch;
+
     utterance.volume = 1;
 
     utterance.onstart = () => {
+      speakingRef.current =
+        true;
+
       setSpeaking(true);
     };
 
     utterance.onend = () => {
+      speakingRef.current =
+        false;
+
       setSpeaking(false);
 
       /*
-      After Aria finishes speaking,
-      continuous mode listens again.
+      Continuous conversation:
+      listen again after Aria finishes.
       */
 
       if (
@@ -621,11 +1037,21 @@ export default function App() {
       ) {
         setTimeout(() => {
           startVoiceRecognition();
-        }, 400);
+        }, 500);
       }
     };
 
-    utterance.onerror = () => {
+    utterance.onerror = (
+      error
+    ) => {
+      console.warn(
+        "Speech synthesis error:",
+        error
+      );
+
+      speakingRef.current =
+        false;
+
       setSpeaking(false);
 
       if (
@@ -634,7 +1060,7 @@ export default function App() {
       ) {
         setTimeout(() => {
           startVoiceRecognition();
-        }, 500);
+        }, 700);
       }
     };
 
@@ -648,43 +1074,56 @@ export default function App() {
   */
 
   function stopSpeaking() {
-    if (window.speechSynthesis) {
+    if (
+      window.speechSynthesis
+    ) {
       window.speechSynthesis.cancel();
     }
+
+    speakingRef.current =
+      false;
 
     setSpeaking(false);
   }
 
   /*
-  Handle AI actions.
+  Browser action.
   */
 
-  function handleAction(action) {
-    if (!action) return;
+  function handleAction(
+    action
+  ) {
+    if (!action) {
+      return;
+    }
 
     if (
-      action.type === "open_url" &&
+      action.type ===
+        "open_url" &&
       action.url
     ) {
-      const success = openUrl(
-        action.url
-      );
+      const success =
+        openUrl(action.url);
 
       if (!success) {
-        setMessages((previous) => [
-          ...previous,
-          {
-            role: "system",
-            content:
-              "Your browser blocked the popup. Please allow popups for Aria.",
-          },
-        ]);
+        setMessages(
+          (previous) => [
+            ...previous,
+
+            {
+              role: "system",
+
+              content:
+                "Your browser blocked the popup. Please allow popups for Aria.",
+            },
+          ]
+        );
       }
     }
   }
 
   /*
-  SEND
+  Send message.
   */
 
   async function handleSend(
@@ -705,36 +1144,54 @@ export default function App() {
       return;
     }
 
+    /*
+    Add user message.
+    */
+
     setInput("");
 
-    setMessages((previous) => [
-      ...previous,
-      {
-        role: "user",
-        content: text,
-      },
-    ]);
+    setMessages(
+      (previous) => [
+        ...previous,
+
+        {
+          role: "user",
+          content: text,
+        },
+      ]
+    );
 
     /*
-    IMPORTANT:
-    Local commands are handled here,
-    so they NEVER consume an LLM request.
+    Local command first.
+
+    NO LLM REQUEST.
     */
 
     const localResult =
       runLocalCommand(text);
 
     if (localResult) {
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          content:
-            localResult.reply,
-        },
-      ]);
+      setMessages(
+        (previous) => [
+          ...previous,
 
-      speak(localResult.reply);
+          {
+            role: "assistant",
+            content:
+              localResult.reply,
+          },
+        ]
+      );
+
+      const forceVoice =
+        /(?:explain|read|say|speak).*(?:voice|aloud|out)|(?:voice|aloud|out).*(?:explain|read|say|speak)/i.test(
+          text
+        );
+
+      speak(
+        localResult.reply,
+        forceVoice
+      );
 
       return;
     }
@@ -743,18 +1200,24 @@ export default function App() {
 
     try {
       const data =
-        await sendToBackend(text);
+        await sendToBackend(
+          text
+        );
 
       /*
       Browser actions.
       */
 
       if (data.action) {
-        handleAction(data.action);
+        handleAction(
+          data.action
+        );
       }
 
       if (
-        Array.isArray(data.actions)
+        Array.isArray(
+          data.actions
+        )
       ) {
         data.actions.forEach(
           handleAction
@@ -762,32 +1225,51 @@ export default function App() {
       }
 
       /*
-      Add AI response.
+      AI response.
       */
 
       const reply =
         data.reply ||
-        "I received your request but didn't get a response.";
+        "I received the request but didn't get a response.";
 
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          content: reply,
-          provider:
-            data.provider,
-          model:
-            data.model,
-        },
-      ]);
+      setMessages(
+        (previous) => [
+          ...previous,
+
+          {
+            role: "assistant",
+
+            content: reply,
+
+            provider:
+              data.provider,
+
+            model:
+              data.model,
+          },
+        ]
+      );
 
       /*
-      Speak response while keeping
-      text visible.
+      Voice explanation.
+
+      Explicit voice commands work even
+      when the normal voice toggle is off.
       */
 
-      if (voiceEnabled) {
-        speak(reply);
+      const forceVoice =
+        /(?:explain|read|say|speak).*(?:voice|aloud|out)|(?:voice|aloud|out).*(?:explain|read|say|speak)/i.test(
+          text
+        );
+
+      if (
+        voiceEnabled ||
+        forceVoice
+      ) {
+        speak(
+          reply,
+          forceVoice
+        );
       }
 
       /*
@@ -795,14 +1277,18 @@ export default function App() {
       */
 
       if (data.switched) {
-        setMessages((previous) => [
-          ...previous,
-          {
-            role: "system",
-            content:
-              `The previous model was unavailable, so I automatically switched to ${data.provider}/${data.model}.`,
-          },
-        ]);
+        setMessages(
+          (previous) => [
+            ...previous,
+
+            {
+              role: "system",
+
+              content:
+                `The primary model was unavailable, so Aria switched to ${data.provider}/${data.model}.`,
+            },
+          ]
+        );
       }
 
       await loadData();
@@ -812,18 +1298,22 @@ export default function App() {
         error
       );
 
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "system",
-          content:
-            `Request failed: ${error.message}`,
-        },
-      ]);
+      setMessages(
+        (previous) => [
+          ...previous,
+
+          {
+            role: "system",
+
+            content:
+              `Request failed: ${error.message}`,
+          },
+        ]
+      );
 
       /*
-      In continuous mode, allow the
-      user to speak again after an error.
+      Continuous voice should remain active
+      after an error.
       */
 
       if (
@@ -841,23 +1331,15 @@ export default function App() {
   }
 
   /*
-  Start microphone recognition.
+  Start microphone.
   */
 
   function startVoiceRecognition() {
     if (
       !speechSupported ||
-      busyRef.current
+      busyRef.current ||
+      speakingRef.current
     ) {
-      return;
-    }
-
-    /*
-    Don't create multiple recognition
-    sessions.
-    */
-
-    if (listening) {
       return;
     }
 
@@ -870,7 +1352,7 @@ export default function App() {
     }
 
     /*
-    Stop previous instance.
+    Don't create overlapping recognizers.
     */
 
     if (recognitionRef.current) {
@@ -882,14 +1364,29 @@ export default function App() {
     const recognition =
       new SpeechRecognition();
 
-    recognition.continuous = false;
+    /*
+    false is intentional.
+
+    Mobile browsers are much more reliable
+    with one utterance at a time.
+
+    Continuous mode is created by restarting
+    recognition after each AI response.
+    */
+
+    recognition.continuous =
+      false;
 
     recognition.interimResults =
       false;
 
-    recognition.lang = "en-US";
+    recognition.lang =
+      "en-US";
 
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives =
+      1;
+
+    let gotResult = false;
 
     recognition.onstart = () => {
       setListening(true);
@@ -905,14 +1402,14 @@ export default function App() {
         return;
       }
 
-      /*
-      Display recognized text.
-      */
+      gotResult = true;
 
-      setInput(transcript);
+      setInput(
+        transcript
+      );
 
       /*
-      Send exactly ONE request.
+      Exactly one request for one utterance.
       */
 
       setTimeout(() => {
@@ -920,18 +1417,23 @@ export default function App() {
           null,
           transcript
         );
-      }, 100);
+      }, 80);
     };
 
     recognition.onerror = (
       event
     ) => {
-      console.error(
+      console.warn(
         "Speech recognition error:",
         event.error
       );
 
       setListening(false);
+
+      /*
+      Permission errors should stop
+      automatic continuous mode.
+      */
 
       if (
         event.error ===
@@ -939,7 +1441,10 @@ export default function App() {
         event.error ===
           "service-not-allowed"
       ) {
-        setContinuousVoice(false);
+        setContinuousVoice(
+          false
+        );
+
         continuousVoiceRef.current =
           false;
       }
@@ -949,37 +1454,21 @@ export default function App() {
       setListening(false);
 
       /*
-      We intentionally DON'T immediately
-      restart here after a transcript.
+      No result + continuous mode:
+      restart listening.
 
-      handleSend() → AI response →
-      speak() → speak.onend →
-      startVoiceRecognition()
-
-      This prevents overlapping
-      microphone/AI operations.
+      With a result, handleSend()
+      owns the next step.
       */
 
       if (
+        !gotResult &&
         continuousVoiceRef.current &&
         !busyRef.current &&
-        !speaking &&
-        !input.trim()
+        !speakingRef.current
       ) {
-        /*
-        Small safety restart for cases
-        where recognition ended without
-        producing speech.
-        */
-
         setTimeout(() => {
-          if (
-            continuousVoiceRef.current &&
-            !busyRef.current &&
-            !listening
-          ) {
-            startVoiceRecognition();
-          }
+          startVoiceRecognition();
         }, 700);
       }
     };
@@ -990,8 +1479,8 @@ export default function App() {
     try {
       recognition.start();
     } catch (error) {
-      console.error(
-        "Unable to start recognition:",
+      console.warn(
+        "Unable to start voice recognition:",
         error
       );
 
@@ -1017,7 +1506,7 @@ export default function App() {
   }
 
   /*
-  Toggle continuous voice mode.
+  Continuous voice toggle.
   */
 
   function toggleContinuousVoice() {
@@ -1029,7 +1518,9 @@ export default function App() {
       continuousVoice ||
       listening
     ) {
-      setContinuousVoice(false);
+      setContinuousVoice(
+        false
+      );
 
       continuousVoiceRef.current =
         false;
@@ -1051,17 +1542,24 @@ export default function App() {
 
   /*
   Tap-to-talk.
+
+  One tap:
+      start listening
+
+  While listening:
+      tap again = stop
+
+  Continuous mode:
+      tap = stop continuous mode
   */
 
   function tapToTalk() {
-    if (!speechSupported || busy) {
+    if (
+      !speechSupported ||
+      busy
+    ) {
       return;
     }
-
-    /*
-    If continuous mode is active,
-    tap stops it.
-    */
 
     if (continuousVoice) {
       toggleContinuousVoice();
@@ -1089,7 +1587,9 @@ export default function App() {
         }
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        error
+      );
     }
 
     setMessages([
@@ -1118,9 +1618,13 @@ export default function App() {
       const data =
         await response.json();
 
-      setNotes(data.notes || []);
+      setNotes(
+        data.notes || []
+      );
     } catch (error) {
-      console.error(error);
+      console.error(
+        error
+      );
     }
   }
 
@@ -1128,7 +1632,9 @@ export default function App() {
   Delete reminder.
   */
 
-  async function deleteReminder(id) {
+  async function deleteReminder(
+    id
+  ) {
     try {
       const response =
         await fetch(
@@ -1145,7 +1651,9 @@ export default function App() {
         data.reminders || []
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        error
+      );
     }
   }
 
@@ -1153,7 +1661,9 @@ export default function App() {
   Delete memory.
   */
 
-  async function deleteMemory(id) {
+  async function deleteMemory(
+    id
+  ) {
     try {
       const response =
         await fetch(
@@ -1166,14 +1676,21 @@ export default function App() {
       const data =
         await response.json();
 
-      setMemory(data.facts || []);
+      setMemory(
+        data.facts || []
+      );
     } catch (error) {
-      console.error(error);
+      console.error(
+        error
+      );
     }
   }
 
   /*
   Save backend URL.
+
+  VITE_API_URL is still preferred
+  over this value.
   */
 
   function saveSettings() {
@@ -1201,9 +1718,30 @@ export default function App() {
     }, 100);
   }
 
+  /*
+  Provider list.
+  */
+
+  const configuredProviders =
+    health?.configuredProviders ||
+    [];
+
+  /*
+  Models for currently selected provider.
+  */
+
+  const selectedProviderData =
+    configuredProviders.find(
+      (provider) =>
+        provider.id ===
+        selectedProvider
+    );
+
   return (
     <div className="aria-app">
-      {/* TOP BAR */}
+      {/* ====================================================
+          TOP BAR
+      ==================================================== */}
 
       <header className="topbar">
         <div className="brand-area">
@@ -1214,6 +1752,7 @@ export default function App() {
                 (value) => !value
               )
             }
+            aria-label="Open menu"
           >
             ☰
           </button>
@@ -1234,6 +1773,81 @@ export default function App() {
         </div>
 
         <div className="topbar-right">
+          {/* MODEL SELECTOR */}
+
+          <div className="model-selector-group">
+            <select
+              className="model-select"
+              value={
+                selectedProvider
+              }
+              onChange={(event) => {
+                const provider =
+                  event.target.value;
+
+                setSelectedProvider(
+                  provider
+                );
+
+                setSelectedModel(
+                  "auto"
+                );
+              }}
+              aria-label="AI provider"
+            >
+              <option value="auto">
+                Auto
+              </option>
+
+              {configuredProviders.map(
+                (item) => (
+                  <option
+                    key={item.id}
+                    value={item.id}
+                  >
+                    {item.id.toUpperCase()}
+                  </option>
+                )
+              )}
+            </select>
+
+            {selectedProvider !==
+              "auto" && (
+              <select
+                className="model-select model-select-secondary"
+                value={
+                  selectedModel
+                }
+                onChange={(event) =>
+                  setSelectedModel(
+                    event.target.value
+                  )
+                }
+                aria-label="AI model"
+              >
+                <option value="auto">
+                  Auto model
+                </option>
+
+                {(
+                  selectedProviderData
+                    ?.models || []
+                ).map(
+                  (model) => (
+                    <option
+                      key={model}
+                      value={model}
+                    >
+                      {model}
+                    </option>
+                  )
+                )}
+              </select>
+            )}
+          </div>
+
+          {/* CONNECTION */}
+
           <div
             className={`connection ${
               connected
@@ -1253,30 +1867,39 @@ export default function App() {
             onClick={() =>
               setSettingsOpen(true)
             }
+            aria-label="Settings"
           >
             ⚙
           </button>
         </div>
       </header>
 
-      {/* BODY */}
+      {/* ====================================================
+          BODY
+      ==================================================== */}
 
       <div className="app-body">
         {/* SIDEBAR */}
 
         <aside
           className={`sidebar ${
-            sidebarOpen ? "open" : ""
+            sidebarOpen
+              ? "open"
+              : ""
           }`}
         >
           <button
             className="new-chat"
             onClick={() => {
               clearConversation();
-              setSidebarOpen(false);
+
+              setSidebarOpen(
+                false
+              );
             }}
           >
             <span>＋</span>
+
             New conversation
           </button>
 
@@ -1287,16 +1910,21 @@ export default function App() {
 
             <button
               className={`sidebar-item ${
-                panel === "reminders"
+                panel ===
+                "reminders"
                   ? "active"
                   : ""
               }`}
               onClick={() =>
-                setPanel("reminders")
+                setPanel(
+                  "reminders"
+                )
               }
             >
               <span>⏰</span>
+
               Reminders
+
               <span className="count">
                 {reminders.length}
               </span>
@@ -1313,7 +1941,9 @@ export default function App() {
               }
             >
               <span>📝</span>
+
               Notes
+
               <span className="count">
                 {notes.length}
               </span>
@@ -1330,7 +1960,9 @@ export default function App() {
               }
             >
               <span>🧠</span>
+
               Memory
+
               <span className="count">
                 {memory.length}
               </span>
@@ -1349,10 +1981,11 @@ export default function App() {
               </div>
 
               <div className="model-status-small">
-                {health
-                  ?.configuredProviders
-                  ?.length || 0}{" "}
-                provider(s) configured
+                {
+                  configuredProviders.length
+                }{" "}
+                provider(s)
+                configured
               </div>
             </div>
 
@@ -1420,10 +2053,18 @@ export default function App() {
             <div className="messages-container">
               <div className="messages">
                 {messages.map(
-                  (message, index) => (
+                  (
+                    message,
+                    index
+                  ) => (
                     <Message
-                      key={`${index}-${message.role}`}
-                      message={message}
+                      key={`${index}-${message.role}-${message.content?.slice(
+                        0,
+                        10
+                      )}`}
+                      message={
+                        message
+                      }
                     />
                   )
                 )}
@@ -1445,7 +2086,9 @@ export default function App() {
                 )}
 
                 <div
-                  ref={messagesEndRef}
+                  ref={
+                    messagesEndRef
+                  }
                 />
               </div>
             </div>
@@ -1455,7 +2098,9 @@ export default function App() {
             <div className="composer-area">
               <form
                 className="composer"
-                onSubmit={handleSend}
+                onSubmit={
+                  handleSend
+                }
               >
                 <button
                   type="button"
@@ -1491,7 +2136,8 @@ export default function App() {
                   value={input}
                   onChange={(event) =>
                     setInput(
-                      event.target.value
+                      event.target
+                        .value
                     )
                   }
                   placeholder={
@@ -1521,7 +2167,70 @@ export default function App() {
 
               <div className="composer-footer">
                 <div className="voice-controls">
+                  {/* VOICE SELECTOR */}
+
+                  <select
+                    className="voice-selector"
+                    value={
+                      selectedVoice
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      setSelectedVoice(
+                        event.target
+                          .value
+                      )
+                    }
+                    aria-label="Aria voice"
+                  >
+                    {ARIA_VOICES.map(
+                      (voice) => (
+                        <option
+                          key={
+                            voice.id
+                          }
+                          value={
+                            voice.id
+                          }
+                        >
+                          {voice.name}{" "}
+                          —{" "}
+                          {
+                            voice.gender
+                          }
+                        </option>
+                      )
+                    )}
+                  </select>
+
+                  {/* VOICE PREVIEW */}
+
                   <button
+                    type="button"
+                    className="voice-preview"
+                    onClick={() => {
+                      const voice =
+                        ARIA_VOICES.find(
+                          (item) =>
+                            item.id ===
+                            selectedVoice
+                        ) ||
+                        ARIA_VOICES[0];
+
+                      speak(
+                        `Hello, I'm ${voice.name}. This is a preview of my voice.`,
+                        true
+                      );
+                    }}
+                  >
+                    ▶ Preview
+                  </button>
+
+                  {/* CONTINUOUS VOICE */}
+
+                  <button
+                    type="button"
                     className={`voice-toggle ${
                       continuousVoice
                         ? "enabled"
@@ -1535,25 +2244,31 @@ export default function App() {
                     }
                   >
                     {continuousVoice
-                      ? "🎙 Continuous voice"
+                      ? "🎙 Continuous"
                       : "🎙 Voice mode"}
                   </button>
 
+                  {/* SPEAK RESPONSES */}
+
                   <button
+                    type="button"
                     className={`voice-toggle ${
                       voiceEnabled
                         ? "enabled"
                         : ""
                     }`}
                     onClick={() => {
+                      const next =
+                        !voiceEnabled;
+
                       setVoiceEnabled(
-                        (value) =>
-                          !value
+                        next
                       );
 
-                      if (
-                        voiceEnabled
-                      ) {
+                      voiceEnabledRef.current =
+                        next;
+
+                      if (!next) {
                         stopSpeaking();
                       }
                     }}
@@ -1565,6 +2280,7 @@ export default function App() {
 
                   {speaking && (
                     <button
+                      type="button"
                       className="voice-stop"
                       onClick={
                         stopSpeaking
@@ -1578,9 +2294,9 @@ export default function App() {
                 <span className="voice-hint">
                   {speechSupported
                     ? continuousVoice
-                      ? "Aria listens after each response"
+                      ? "Aria listens again after each response"
                       : "Tap 🎙 to speak"
-                    : "Voice input is not supported by this browser"}
+                    : "Voice input isn't supported by this browser"}
                 </span>
               </div>
             </div>
@@ -1606,7 +2322,7 @@ export default function App() {
                     ? `${reminders.length} active`
                     : panel === "notes"
                     ? `${notes.length} saved`
-                    : `${memory.length} facts`}
+                    : `${memory.length} saved`}
                 </span>
               </div>
             </div>
@@ -1661,6 +2377,7 @@ export default function App() {
                           </div>
 
                           <button
+                            type="button"
                             onClick={() =>
                               deleteReminder(
                                 reminder._id ||
@@ -1723,6 +2440,7 @@ export default function App() {
                           </div>
 
                           <button
+                            type="button"
                             onClick={() =>
                               deleteNote(
                                 note._id ||
@@ -1785,6 +2503,7 @@ export default function App() {
                           </div>
 
                           <button
+                            type="button"
                             onClick={() =>
                               deleteMemory(
                                 fact._id ||
@@ -1833,6 +2552,7 @@ export default function App() {
               </div>
 
               <button
+                type="button"
                 onClick={() =>
                   setSettingsOpen(false)
                 }
@@ -1849,19 +2569,22 @@ export default function App() {
               value={serverUrl}
               onChange={(event) =>
                 setServerUrl(
-                  event.target.value
+                  event.target
+                    .value
                 )
               }
               placeholder="https://your-server.onrender.com"
             />
 
             <div className="modal-help">
-              Normally this should be
-              your VITE_API_URL value.
+              Vercel's VITE_API_URL
+              takes priority over this
+              local browser value.
             </div>
 
             <div className="modal-actions">
               <button
+                type="button"
                 className="secondary-button"
                 onClick={() =>
                   setSettingsOpen(false)
@@ -1871,6 +2594,7 @@ export default function App() {
               </button>
 
               <button
+                type="button"
                 className="primary-button"
                 onClick={
                   saveSettings
