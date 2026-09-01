@@ -8,6 +8,9 @@ import "./index.css";
 const SERVER_URL_KEY = "aria_server_url";
 
 function defaultApiBase() {
+  if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
   const h = typeof window !== "undefined" ? window.location.hostname : "";
   if (h === "localhost" || h === "127.0.0.1") return "http://localhost:3001";
   return "";
