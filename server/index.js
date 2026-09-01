@@ -1,24 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import os from "os";
-import fs from "fs";
-import path from "path";
 import mongoose from "mongoose";
-import { Session } from "./models.js";
-import {
-  loadConversation,
-  saveConversation,
-  clearConversation,
-  loadMemory,
-  deleteMemoryFact,
-  getDueReminders,
-  markReminderDelivered,
-  getUpcomingReminders,
-  deleteReminder,
-  loadNotes,
-  deleteNote,
-} from "./store.js";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { User, Session, Memory, Reminder, Note } from "./models.js";
 import { TOOLS, runTool } from "./tools.js";
 
 dotenv.config();
@@ -28,55 +14,44 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || "aria_super_secret_jwt_key_2026";
 const MAX_TOOL_ITERATIONS = 6;
 const HISTORY_WINDOW = 28;
-
-const LOCAL_SESSIONS_FILE = path.resolve("sessions.json");
-
-function loadLocalSessions() {
-  try {
-    if (fs.existsSync(LOCAL_SESSIONS_FILE)) {
-      return JSON.parse(fs.readFileSync(LOCAL_SESSIONS_FILE, "utf8"));
-    }
-  } catch (e) {
-    console.error("Error reading local sessions:", e);
-  }
-  return [];
-}
-
-function saveLocalSessions(sessions) {
-  try {
-    fs.writeFileSync(LOCAL_SESSIONS_FILE, JSON.stringify(sessions, null, 2));
-  } catch (e) {
-    console.error("Error saving local sessions:", e);
-  }
-}
 
 const MONGODB_URI = process.env.MONGODB_URI;
 if (MONGODB_URI) {
   mongoose
     .connect(MONGODB_URI)
-    .then(() => console.log(" Connected to MongoDB Atlas successfully."))
-    .catch((err) => console.error(" MongoDB connection error:", err.message));
+    .then(() => console.log("Connected to MongoDB Atlas successfully."))
+    .catch((err) => console.error("MongoDB connection error:", err.message));
 } else {
-  console.warn("⚠ MONGODB_URI not found in server/.env — chat sessions will be stored locally in sessions.json.");
+  console.error("⚠ MONGODB_URI is required in environment variables.");
 }
 
+async function authenticateToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Access token required" });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(403).json({ error: "User not found" });
+    req.user = user;
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: "Invalid or expired token" });
+  }
+}
+
+// FULL 10+ PROVIDERS & MODELS FAILOVER POOL
 const PROVIDERS = [
   {
     id: "groq",
     envKey: "GROQ_API_KEY",
     kind: "openai-compatible",
     baseUrl: "https://api.groq.com/openai/v1/chat/completions",
-    models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
-  },
-  {
-    id: "openrouter",
-    envKey: "OPENROUTER_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://openrouter.ai/api/v1/chat/completions",
-    extraHeaders: { "HTTP-Referer": "http://localhost:5173", "X-Title": "Aria Voice Companion" },
-    models: ["openrouter/free", "meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen3-coder:free"],
+    models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
   },
   {
     id: "cerebras",
@@ -86,10 +61,18 @@ const PROVIDERS = [
     models: ["llama-3.3-70b", "gpt-oss-120b"],
   },
   {
+    id: "openrouter",
+    envKey: "OPENROUTER_API_KEY",
+    kind: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1/chat/completions",
+    extraHeaders: { "HTTP-Referer": "https://aria-ai.app", "X-Title": "Aria AI" },
+    models: ["meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen3-coder:free"],
+  },
+  {
     id: "gemini",
     envKey: "GEMINI_API_KEY",
     kind: "gemini",
-    models: ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-flash-latest"],
+    models: ["gemini-2.5-flash", "gemini-flash-latest"],
   },
   {
     id: "openai",
@@ -107,26 +90,11 @@ const PROVIDERS = [
   },
 ].filter((p) => process.env[p.envKey]);
 
-const cooldownUntil = new Map();
-const RATE_LIMIT_COOLDOWN_MS = 60_000;
-const BAD_KEY_COOLDOWN_MS = 60 * 60_000;
-let workingCandidate = null;
-
-function isOnCooldown(key) {
-  const until = cooldownUntil.get(key);
-  return until && Date.now() < until;
-}
-
-function basePersonality(memoryFacts) {
+function basePersonality(memoryFacts, userName) {
   const memoryBlock = memoryFacts.length
-    ? `\n\nThings you know about the user from past conversations:\n` + memoryFacts.map((m) => `- ${m.fact}`).join("\n")
+    ? `\n\nThings you know about ${userName} from past conversations:\n` + memoryFacts.map((m) => `- ${m.fact}`).join("\n")
     : "";
-  return `You are Aria, a warm, emotionally intelligent voice-and-agentic companion for a college student (final-year CS, targeting software placements). You have four jobs:
-1) Be a genuine conversational partner — casual chat, encouragement, thinking out loud.
-2) On request, run realistic HR/behavioral mock-interview practice: ask one question at a time, listen to the answer, then give short, specific feedback before the next question.
-3) Act as an agent: when the user asks you to open local apps (like notepad, calculator, vs code), play something, search, check weather, set reminders, or manage notes, use your tools to execute them directly.
-4) Be genuinely useful as a general-purpose assistant.
-Speak the way a smart, kind friend would talk out loud. For code, format it clearly using Markdown triple backticks with the programming language specified.${memoryBlock}`;
+  return `You are Aria, a warm, emotionally intelligent voice-and-agentic companion for ${userName}. Speak naturally, warmly, and concisely.${memoryBlock}`;
 }
 
 async function callOpenAICompatible(provider, model, messages) {
@@ -139,320 +107,143 @@ async function callOpenAICompatible(provider, model, messages) {
     },
     body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: 1200, temperature: 0.7 }),
   });
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    const err = new Error(errBody.error?.message || `${provider.id} API error ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) throw new Error(`${provider.id} API error ${res.status}`);
   const data = await res.json();
   const choice = data.choices?.[0];
-  if (!choice) throw Object.assign(new Error(`${provider.id} returned no choices`), { status: 502 });
   return { content: choice.message.content || null, tool_calls: choice.message.tool_calls || [] };
-}
-
-function toGeminiSchema(schema) {
-  if (!schema || typeof schema !== "object") return schema;
-  const out = { ...schema };
-  if (typeof out.type === "string") out.type = out.type.toUpperCase();
-  if (out.properties) {
-    out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, toGeminiSchema(v)]));
-  }
-  return out;
-}
-
-function toGeminiFunctionDecls() {
-  return TOOLS.map((t) => ({
-    name: t.function.name,
-    description: t.function.description,
-    parameters: toGeminiSchema(t.function.parameters),
-  }));
-}
-
-function toGeminiContents(messages) {
-  const toolNameByCallId = {};
-  messages.forEach((m) => (m.tool_calls || []).forEach((tc) => (toolNameByCallId[tc.id] = tc.function.name)));
-
-  const contents = [];
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.role === "system") continue;
-    if (m.role === "user") {
-      contents.push({ role: "user", parts: [{ text: m.content || "" }] });
-    } else if (m.role === "assistant") {
-      const parts = [];
-      if (m.content) parts.push({ text: m.content });
-      (m.tool_calls || []).forEach((tc) => {
-        let args = {};
-        try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
-        parts.push({ functionCall: { name: tc.function.name, args } });
-      });
-      contents.push({ role: "model", parts });
-    } else if (m.role === "tool") {
-      const parts = [];
-      while (i < messages.length && messages[i].role === "tool") {
-        const tm = messages[i];
-        let respObj;
-        try { respObj = JSON.parse(tm.content); } catch { respObj = { result: tm.content }; }
-        parts.push({ functionResponse: { name: tm.name || toolNameByCallId[tm.tool_call_id] || "unknown_tool", response: respObj } });
-        i++;
-      }
-      i--;
-      contents.push({ role: "user", parts });
-    }
-  }
-  return contents;
 }
 
 async function callGemini(provider, model, messages) {
   const systemMsg = messages.find((m) => m.role === "system");
-  const contents = toGeminiContents(messages);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": process.env[provider.envKey] },
     body: JSON.stringify({
       system_instruction: systemMsg ? { parts: [{ text: systemMsg.content }] } : undefined,
-      contents,
-      tools: [{ functionDeclarations: toGeminiFunctionDecls() }],
+      contents: messages.filter(m => m.role !== "system").map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content || "" }] })),
       generationConfig: { maxOutputTokens: 1200 },
     }),
   });
-  if (!res.ok) {
-    const errText = await res.text();
-    const err = new Error(`gemini API error ${res.status}: ${errText.slice(0, 300)}`);
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
   const data = await res.json();
   const candidate = data.candidates?.[0];
-  if (!candidate) {
-    const blockReason = data.promptFeedback?.blockReason;
-    throw Object.assign(new Error(blockReason ? `blocked: ${blockReason}` : "gemini returned no candidates"), { status: 502 });
-  }
-  const parts = candidate.content?.parts || [];
-  const text = parts.filter((p) => p.text).map((p) => p.text).join(" ").trim();
-  const toolCalls = parts
-    .filter((p) => p.functionCall)
-    .map((p, idx) => ({
-      id: p.functionCall.id || `gemini_${Date.now()}_${idx}`,
-      type: "function",
-      function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) },
-    }));
-  return { content: text || null, tool_calls: toolCalls };
+  const text = candidate?.content?.parts?.map((p) => p.text).join(" ") || "";
+  return { content: text, tool_calls: [] };
 }
 
-async function callModel(provider, model, messages) {
-  if (provider.kind === "gemini") return callGemini(provider, model, messages);
-  return callOpenAICompatible(provider, model, messages);
-}
-
-function classifyFailure(err) {
-  if (err.status === 429) return { cooldownMs: RATE_LIMIT_COOLDOWN_MS, label: "rate-limited" };
-  if (err.status === 401 || err.status === 403) return { cooldownMs: BAD_KEY_COOLDOWN_MS, label: "auth error" };
-  if (err.status === 404 || (err.status === 400 && /not found|does not exist|decommission/i.test(err.message))) {
-    return { cooldownMs: BAD_KEY_COOLDOWN_MS, label: "model unavailable" };
-  }
-  return { cooldownMs: RATE_LIMIT_COOLDOWN_MS, label: "error" };
-}
-
-function buildCandidateOrder() {
-  const all = [];
-  for (const provider of PROVIDERS) {
-    for (const model of provider.models) all.push({ provider, model, key: `${provider.id}:${model}` });
-  }
-  const cachedFirst =
-    workingCandidate && !isOnCooldown(workingCandidate.key)
-      ? [workingCandidate, ...all.filter((c) => c.key !== workingCandidate.key)]
-      : all;
-  const fresh = cachedFirst.filter((c) => !isOnCooldown(c.key));
-  const stale = cachedFirst.filter((c) => isOnCooldown(c.key));
-  return [...fresh, ...stale];
-}
-
+// FAILOVER ROTATION LOGIC: Iterates through all providers/models. If one hits rate limit (429) or fails, it instantly switches to the next.
 async function callAI(messages) {
-  const order = buildCandidateOrder();
-  if (order.length === 0) {
-    throw Object.assign(new Error("No AI provider configured in server/.env"), { status: 500 });
-  }
-  let lastErr;
-  for (const cand of order) {
-    try {
-      const message = await callModel(cand.provider, cand.model, messages);
-      workingCandidate = cand;
-      cooldownUntil.delete(cand.key);
-      return { message, providerId: cand.provider.id, model: cand.model };
-    } catch (err) {
-      lastErr = err;
-      const { cooldownMs, label } = classifyFailure(err);
-      cooldownUntil.set(cand.key, Date.now() + cooldownMs);
-      console.warn(`[ai] ${cand.key} ${label} (${err.status}: ${err.message}) — trying next candidate`);
-      if (workingCandidate?.key === cand.key) workingCandidate = null;
+  for (const provider of PROVIDERS) {
+    for (const model of provider.models) {
+      try {
+        const message = provider.kind === "gemini" ? await callGemini(provider, model, messages) : await callOpenAICompatible(provider, model, messages);
+        return { message, providerId: provider.id, model };
+      } catch (err) {
+        console.warn(`[ai] ${provider.id}/${model} failed (${err.message}), trying next model...`);
+      }
     }
   }
-  throw lastErr || new Error("All configured AI providers failed.");
+  throw new Error("All configured AI providers and models failed.");
 }
 
-app.get("/health", (req, res) =>
-  res.json({
-    ok: true,
-    configuredProviders: PROVIDERS.map((p) => p.id),
-    lastUsed: workingCandidate ? `${workingCandidate.provider.id}/${workingCandidate.model}` : null,
-    dbConnected: mongoose.connection.readyState === 1,
-  })
-);
+app.get("/health", (req, res) => res.json({ ok: true, activeProviders: PROVIDERS.map(p => p.id), db: mongoose.connection.readyState === 1 }));
 
-app.get("/api/sessions", async (req, res) => {
+// Auth Routes
+app.post("/api/auth/register", async (req, res) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      const sessions = await Session.find().select("title updatedAt").sort("-updatedAt");
-      return res.json(sessions);
-    } else {
-      const local = loadLocalSessions().map(s => ({ _id: s._id, title: s.title, updatedAt: s.updatedAt })).sort((a,b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-      return res.json(local);
-    }
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch sessions" });
+    const { email, password, name } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: "All fields are required" });
+
+    const existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ error: "Email already registered" });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await User.create({ email, passwordHash, name, avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${name}` });
+
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/api/sessions/:id", async (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      const session = await Session.findById(req.params.id);
-      return res.json(session);
-    } else {
-      const local = loadLocalSessions();
-      const session = local.find(s => s._id === req.params.id);
-      return res.json(session || { _id: req.params.id, title: "Chat", messages: [] });
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+      return res.status(401).json({ error: "Invalid email or password" });
     }
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch session" });
+
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.delete("/api/sessions/:id", async (req, res) => {
+app.post("/api/auth/google", async (req, res) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      await Session.findByIdAndDelete(req.params.id);
-      return res.json({ ok: true });
-    } else {
-      let local = loadLocalSessions();
-      local = local.filter(s => s._id !== req.params.id);
-      saveLocalSessions(local);
-      return res.json({ ok: true });
+    const { email, name, avatar } = req.body;
+    let user = await User.findOne({ email });
+    if (!user) {
+      const dummyHash = await bcrypt.hash(Math.random().toString(), 10);
+      user = await User.create({ email, passwordHash: dummyHash, name, avatar: avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}` });
     }
-  } catch (error) {
-    res.status(500).json({ error: "Failed to delete session" });
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/api/conversation", (req, res) => {
-  res.json({ messages: loadConversation() });
+app.get("/api/auth/me", authenticateToken, (req, res) => {
+  res.json({ user: { id: req.user._id, email: req.user.email, name: req.user.name, avatar: req.user.avatar } });
 });
 
-app.post("/api/conversation/clear", (req, res) => {
-  clearConversation();
+// Scoped Data Routes
+app.get("/api/sessions", authenticateToken, async (req, res) => {
+  const sessions = await Session.find({ userId: req.user._id }).select("title updatedAt").sort("-updatedAt");
+  res.json(sessions);
+});
+
+app.get("/api/sessions/:id", authenticateToken, async (req, res) => {
+  const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
+  res.json(session || { messages: [] });
+});
+
+app.delete("/api/sessions/:id", authenticateToken, async (req, res) => {
+  await Session.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
   res.json({ ok: true });
 });
 
-app.get("/api/reminders/due", (req, res) => {
-  const due = getDueReminders();
-  due.forEach((r) => markReminderDelivered(r.id));
-  res.json({ due });
-});
-
-app.get("/api/reminders", (req, res) => {
-  res.json({ reminders: getUpcomingReminders() });
-});
-
-app.get("/api/notes", (req, res) => {
-  res.json({ notes: loadNotes() });
-});
-
-app.delete("/api/notes/:id", (req, res) => {
-  const notes = deleteNote(req.params.id);
-  res.json({ notes });
-});
-
-app.delete("/api/reminders/:id", (req, res) => {
-  deleteReminder(req.params.id);
-  res.json({ reminders: getUpcomingReminders() });
-});
-
-app.get("/api/memory", (req, res) => {
-  res.json({ facts: loadMemory() });
-});
-
-app.delete("/api/memory/:id", (req, res) => {
-  const facts = deleteMemoryFact(req.params.id);
-  res.json({ facts });
-});
-
-app.post("/api/chat", async (req, res) => {
-  if (PROVIDERS.length === 0) {
-    return res.status(500).json({ error: "No AI provider is configured." });
-  }
+app.post("/api/chat", authenticateToken, async (req, res) => {
   const { message, sessionId } = req.body;
-  if (!message || !message.trim()) {
-    return res.status(400).json({ error: "message is required" });
+  if (!message || !message.trim()) return res.status(400).json({ error: "message required" });
+
+  const memoryFacts = await Memory.find({ userId: req.user._id });
+  const systemText = basePersonality(memoryFacts, req.user.name);
+
+  let session = sessionId ? await Session.findOne({ _id: sessionId, userId: req.user._id }) : null;
+  if (!session) {
+    session = await Session.create({ userId: req.user._id, title: message.substring(0, 30) + "..." });
   }
 
-  const memoryFacts = loadMemory();
-  const systemText = basePersonality(memoryFacts);
-
-  let session = null;
-  let localSessions = [];
-  let isMongo = mongoose.connection.readyState === 1;
-
-  if (isMongo) {
-    if (sessionId) session = await Session.findById(sessionId);
-    if (!session) session = new Session({ title: message.substring(0, 32) + "..." });
-  } else {
-    localSessions = loadLocalSessions();
-    if (sessionId) session = localSessions.find(s => s._id === sessionId);
-    if (!session) {
-      session = { _id: Date.now().toString(), title: message.substring(0, 32) + "...", messages: [], updatedAt: Date.now() };
-      localSessions.unshift(session);
-    }
-  }
-
-  const history = isMongo 
-    ? session.messages.map((m) => ({ role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, name: m.name }))
-    : session.messages;
-
-  history.push({ role: "user", content: message });
   session.messages.push({ role: "user", content: message });
-
-  function windowedHistory(full) {
-    if (full.length <= HISTORY_WINDOW) return full;
-    let start = full.length - HISTORY_WINDOW;
-    while (start > 0) {
-      const m = full[start];
-      if (m.role === "tool") { start++; continue; }
-      if (m.role === "assistant" && m.tool_calls?.length) { start++; continue; }
-      break;
-    }
-    return full.slice(start);
-  }
-
-  let messages = [{ role: "system", content: systemText }, ...windowedHistory(history)];
+  let messages = [{ role: "system", content: systemText }, ...session.messages.slice(-HISTORY_WINDOW)];
   const actions = [];
 
   try {
     let iterations = 0;
     let finalText = null;
-    let lastProviderId = null;
-    let lastModel = null;
 
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
-      const { message: msg, providerId, model } = await callAI(messages);
-      lastProviderId = providerId;
-      lastModel = model;
-
+      const { message: msg } = await callAI(messages);
       const toolCalls = msg.tool_calls || [];
+      
       if (toolCalls.length === 0) {
-        finalText = (msg.content || "").trim();
+        finalText = msg.content || "";
         break;
       }
 
@@ -461,52 +252,27 @@ app.post("/api/chat", async (req, res) => {
 
       for (const tc of toolCalls) {
         let args = {};
-        try { args = JSON.parse(tc.function.arguments || "{}"); } catch { args = {}; }
-        const { functionResponse, action } = await runTool(tc.function.name, args);
+        try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        const { functionResponse, action } = await runTool(tc.function.name, args, req.user._id);
         if (action) actions.push(action);
-        
+
         const toolMsg = { role: "tool", tool_call_id: tc.id, name: tc.function.name, content: JSON.stringify(functionResponse) };
         messages.push(toolMsg);
         session.messages.push(toolMsg);
       }
     }
 
-    if (finalText === null || finalText === "") {
-      finalText = "I processed that action, let me know if you need anything else!";
-    }
-
+    if (!finalText) finalText = "Done!";
     session.messages.push({ role: "assistant", content: finalText });
     session.updatedAt = Date.now();
+    await session.save();
 
-    if (isMongo) {
-      await session.save();
-    } else {
-      saveLocalSessions(localSessions);
-    }
-
-    res.json({
-      reply: finalText,
-      actions,
-      provider: lastProviderId,
-      model: lastModel,
-      sessionId: session._id || session.id,
-      sessionTitle: session.title,
-    });
+    res.json({ reply: finalText, actions, sessionId: session._id });
   } catch (err) {
-    console.error(err);
-    const friendly = err.status === 429
-      ? "All configured AI providers are rate-limited right now. Please wait a moment."
-      : err.message;
-    res.status(500).json({ error: friendly });
+    res.status(500).json({ error: err.message });
   }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Aria Server listening on http://localhost:${PORT}`);
-  const lanIp = Object.values(os.networkInterfaces())
-    .flat()
-    .find((i) => i && i.family === "IPv4" && !i.internal)?.address;
-  if (lanIp) {
-    console.log(`📱 On Mobile / LAN: set server URL to http://${lanIp}:${PORT}`);
-  }
+  console.log(`🚀 Aria Server listening on port ${PORT}`);
 });
