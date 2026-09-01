@@ -76,7 +76,7 @@ export default function App() {
     if (!user && window.google) {
       try {
         window.google.accounts.id.initialize({
-          client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com", // Replace with your Google OAuth Client ID if desired, or let it prompt
+          client_id: "68678936458-6taocclfu3v4q5tcp4vj5tm7t0c97bqr.apps.googleusercontent.com", // Replace with your Google OAuth Client ID if desired, or let it prompt
           callback: handleGoogleResponse,
         });
         if (googleBtnRef.current) {
