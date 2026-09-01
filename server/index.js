@@ -2,76 +2,107 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { User, Session, Memory, Reminder, Note } from "./models.js";
+import os from "os";
 import { TOOLS, runTool } from "./tools.js";
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL || '*',
+  credentials: true
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || "aria_super_secret_jwt_key_2026";
 const MAX_TOOL_ITERATIONS = 6;
 const HISTORY_WINDOW = 28;
 
-const MONGODB_URI = process.env.MONGODB_URI;
-if (MONGODB_URI) {
-  mongoose
-    .connect(MONGODB_URI)
-    .then(() => console.log("Connected to MongoDB Atlas successfully."))
-    .catch((err) => console.error("MongoDB connection error:", err.message));
-} else {
-  console.error("⚠ MONGODB_URI is required in environment variables.");
-}
+// --- MONGODB ATLAS CONNECTION FOR CLOUD PERSISTENCE ---
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => console.log('MongoDB Atlas Connected Successfully')).catch(err => console.error('MongoDB Connection Error:', err));
 
-async function authenticateToken(req, res, next) {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Access token required" });
+// Database Schemas for Cloud Persistence
+const conversationSchema = new mongoose.Schema({
+  messages: [{
+    role: { type: String, required: true },
+    content: { type: String, required: true },
+    tool_calls: Array,
+    timestamp: { type: Date, default: Date.now }
+  }],
+  updatedAt: { type: Date, default: Date.now }
+});
+const Conversation = mongoose.model('Conversation', conversationSchema);
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user) return res.status(403).json({ error: "User not found" });
-    req.user = user;
-    next();
-  } catch (err) {
-    return res.status(403).json({ error: "Invalid or expired token" });
+const memorySchema = new mongoose.Schema({
+  fact: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+const Memory = mongoose.model('Memory', memorySchema);
+
+const reminderSchema = new mongoose.Schema({
+  text: { type: String, required: true },
+  dueAt: { type: Date, required: true },
+  delivered: { type: Boolean, default: false }
+});
+const Reminder = mongoose.model('Reminder', reminderSchema);
+
+const noteSchema = new mongoose.Schema({
+  text: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+const Note = mongoose.model('Note', noteSchema);
+
+// Helper helper functions replacing store.js for cloud persistence
+async function loadConversation() {
+  let doc = await Conversation.findOne();
+  if (!doc) {
+    doc = await Conversation.create({ messages: [] });
   }
+  return doc.messages;
 }
 
-// Multi-provider AI Failover Pool
+async function saveConversation(messages) {
+  await Conversation.findOneAndUpdate({}, { messages, updatedAt: Date.now() }, { upsert: true });
+}
+
+async function clearConversation() {
+  await Conversation.findOneAndUpdate({}, { messages: [], updatedAt: Date.now() }, { upsert: true });
+}
+
+// ---------------------------------------------------------------------------
+// Multi-provider AI backend pool
+// ---------------------------------------------------------------------------
 const PROVIDERS = [
   {
     id: "groq",
     envKey: "GROQ_API_KEY",
     kind: "openai-compatible",
     baseUrl: "https://api.groq.com/openai/v1/chat/completions",
-    models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
-  },
-  {
-    id: "cerebras",
-    envKey: "CEREBRAS_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.cerebras.ai/v1/chat/completions",
-    models: ["llama-3.3-70b"],
+    models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
   },
   {
     id: "openrouter",
     envKey: "OPENROUTER_API_KEY",
     kind: "openai-compatible",
     baseUrl: "https://openrouter.ai/api/v1/chat/completions",
-    models: ["meta-llama/llama-3.3-70b-instruct:free"],
+    extraHeaders: { "HTTP-Referer": process.env.CLIENT_URL || "http://localhost:5173", "X-Title": "Aria Voice Companion" },
+    models: ["openrouter/free", "meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen3-coder:free"],
+  },
+  {
+    id: "cerebras",
+    envKey: "CEREBRAS_API_KEY",
+    kind: "openai-compatible",
+    baseUrl: "https://api.cerebras.ai/v1/chat/completions",
+    models: ["llama-3.3-70b", "gpt-oss-120b"],
   },
   {
     id: "gemini",
     envKey: "GEMINI_API_KEY",
     kind: "gemini",
-    models: ["gemini-2.5-flash", "gemini-flash-latest"],
+    models: ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-flash-latest"],
   },
   {
     id: "openai",
@@ -80,13 +111,35 @@ const PROVIDERS = [
     baseUrl: "https://api.openai.com/v1/chat/completions",
     models: ["gpt-4o-mini", "gpt-4o"],
   },
+  {
+    id: "xai",
+    envKey: "XAI_API_KEY",
+    kind: "openai-compatible",
+    baseUrl: "https://api.x.ai/v1/chat/completions",
+    models: ["grok-4-fast", "grok-3"],
+  },
 ].filter((p) => process.env[p.envKey]);
 
-function basePersonality(memoryFacts, userName) {
+const cooldownUntil = new Map();
+const RATE_LIMIT_COOLDOWN_MS = 60_000;
+const BAD_KEY_COOLDOWN_MS = 60 * 60_000;
+let workingCandidate = null;
+
+function isOnCooldown(key) {
+  const until = cooldownUntil.get(key);
+  return until && Date.now() < until;
+}
+
+function basePersonality(memoryFacts) {
   const memoryBlock = memoryFacts.length
-    ? `\n\nThings you know about ${userName} from past conversations:\n` + memoryFacts.map((m) => `- ${m.fact}`).join("\n")
+    ? `\n\nThings you know about the user from past conversations:\n` + memoryFacts.map((m) => `- ${m.fact}`).join("\n")
     : "";
-  return `You are Aria, a warm, emotionally intelligent voice-and-agentic companion for ${userName}. Speak naturally, warmly, and concisely.${memoryBlock}`;
+  return `You are Aria, a warm, emotionally intelligent voice-and-agentic companion for a college student (final-year CS, targeting software placements). You have four jobs:
+1) Be a genuine conversational partner — casual chat, encouragement, thinking out loud, like a sharp, friendly human.
+2) On request, run realistic HR/behavioral mock-interview practice: ask one question at a time, listen to the answer, then give short, specific, encouraging feedback before the next question.
+3) Act as an agent: when the user asks you to open something, play something, search, check weather/time/news/currency, do math, convert units, translate something, look something up, set or cancel a reminder, jot down or delete a note, draft an email, get directions, generate a password or QR code, shorten a link, tell a joke, roll dice, or flip a coin — use your tools to actually do it, then confirm briefly and naturally.
+4) Be genuinely useful as a general-purpose assistant: answer factual/coding/study questions directly and reach for a tool whenever it gets a more accurate or current answer.
+Speak the way a smart, kind friend would talk out loud — contractions, short sentences, no bullet points or markdown. Keep replies concise (2-5 sentences) unless asked for depth.${memoryBlock}`;
 }
 
 async function callOpenAICompatible(provider, model, messages) {
@@ -95,191 +148,293 @@ async function callOpenAICompatible(provider, model, messages) {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env[provider.envKey]}`,
+      ...(provider.extraHeaders || {}),
     },
-    body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: 1200, temperature: 0.7 }),
+    body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: 700, temperature: 0.7 }),
   });
-  if (!res.ok) throw new Error(`${provider.id} API error ${res.status}`);
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    const err = new Error(errBody.error?.message || `${provider.id} API error ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const choice = data.choices?.[0];
+  if (!choice) throw Object.assign(new Error(`${provider.id} returned no choices`), { status: 502 });
   return { content: choice.message.content || null, tool_calls: choice.message.tool_calls || [] };
+}
+
+function toGeminiSchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  const out = { ...schema };
+  if (typeof out.type === "string") out.type = out.type.toUpperCase();
+  if (out.properties) {
+    out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, toGeminiSchema(v)]));
+  }
+  return out;
+}
+
+function toGeminiFunctionDecls() {
+  return TOOLS.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: toGeminiSchema(t.function.parameters),
+  }));
+}
+
+function toGeminiContents(messages) {
+  const toolNameByCallId = {};
+  messages.forEach((m) => (m.tool_calls || []).forEach((tc) => (toolNameByCallId[tc.id] = tc.function.name)));
+
+  const contents = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === "system") continue;
+    if (m.role === "user") {
+      contents.push({ role: "user", parts: [{ text: m.content || "" }] });
+    } else if (m.role === "assistant") {
+      const parts = [];
+      if (m.content) parts.push({ text: m.content });
+      (m.tool_calls || []).forEach((tc) => {
+        let args = {};
+        try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        parts.push({ functionCall: { name: tc.function.name, args } });
+      });
+      contents.push({ role: "model", parts });
+    } else if (m.role === "tool") {
+      const parts = [];
+      while (i < messages.length && messages[i].role === "tool") {
+        const tm = messages[i];
+        let respObj;
+        try { respObj = JSON.parse(tm.content); } catch { respObj = { result: tm.content }; }
+        parts.push({ functionResponse: { name: tm.name || toolNameByCallId[tm.tool_call_id] || "unknown_tool", response: respObj } });
+        i++;
+      }
+      i--;
+      contents.push({ role: "user", parts });
+    }
+  }
+  return contents;
 }
 
 async function callGemini(provider, model, messages) {
   const systemMsg = messages.find((m) => m.role === "system");
+  const contents = toGeminiContents(messages);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": process.env[provider.envKey] },
     body: JSON.stringify({
       system_instruction: systemMsg ? { parts: [{ text: systemMsg.content }] } : undefined,
-      contents: messages.filter(m => m.role !== "system").map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content || "" }] })),
-      generationConfig: { maxOutputTokens: 1200 },
+      contents,
+      tools: [{ functionDeclarations: toGeminiFunctionDecls() }],
+      generationConfig: { maxOutputTokens: 700 },
     }),
   });
-  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+  if (!res.ok) {
+    const errText = await res.text();
+    const err = new Error(`gemini API error ${res.status}: ${errText.slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const candidate = data.candidates?.[0];
-  const text = candidate?.content?.parts?.map((p) => p.text).join(" ") || "";
-  return { content: text, tool_calls: [] };
+  if (!candidate) throw Object.assign(new Error("gemini returned no candidates"), { status: 502 });
+  const parts = candidate.content?.parts || [];
+  const text = parts.filter((p) => p.text).map((p) => p.text).join(" ").trim();
+  const toolCalls = parts
+    .filter((p) => p.functionCall)
+    .map((p, idx) => ({
+      id: p.functionCall.id || `gemini_${Date.now()}_${idx}`,
+      type: "function",
+      function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) },
+    }));
+  return { content: text || null, tool_calls: toolCalls };
+}
+
+async function callModel(provider, model, messages) {
+  if (provider.kind === "gemini") return callGemini(provider, model, messages);
+  return callOpenAICompatible(provider, model, messages);
+}
+
+function classifyFailure(err) {
+  if (err.status === 429) return { cooldownMs: RATE_LIMIT_COOLDOWN_MS, label: "rate-limited" };
+  if (err.status === 401 || err.status === 403) return { cooldownMs: BAD_KEY_COOLDOWN_MS, label: "auth error" };
+  if (err.status === 404 || (err.status === 400 && /not found|does not exist/i.test(err.message))) {
+    return { cooldownMs: BAD_KEY_COOLDOWN_MS, label: "model unavailable" };
+  }
+  return { cooldownMs: RATE_LIMIT_COOLDOWN_MS, label: "error" };
+}
+
+function buildCandidateOrder() {
+  const all = [];
+  for (const provider of PROVIDERS) {
+    for (const model of provider.models) all.push({ provider, model, key: `${provider.id}:${model}` });
+  }
+  const cachedFirst = workingCandidate && !isOnCooldown(workingCandidate.key)
+    ? [workingCandidate, ...all.filter((c) => c.key !== workingCandidate.key)]
+    : all;
+  return [...cachedFirst.filter((c) => !isOnCooldown(c.key)), ...cachedFirst.filter((c) => isOnCooldown(c.key))];
 }
 
 async function callAI(messages) {
-  for (const provider of PROVIDERS) {
-    for (const model of provider.models) {
-      try {
-        const message = provider.kind === "gemini" ? await callGemini(provider, model, messages) : await callOpenAICompatible(provider, model, messages);
-        return { message, providerId: provider.id, model };
-      } catch {
-        // try next model
-      }
+  const order = buildCandidateOrder();
+  if (order.length === 0) throw Object.assign(new Error("No AI provider is configured."), { status: 500 });
+  let lastErr;
+  for (const cand of order) {
+    try {
+      const message = await callModel(cand.provider, cand.model, messages);
+      workingCandidate = cand;
+      cooldownUntil.delete(cand.key);
+      return { message, providerId: cand.provider.id, model: cand.model };
+    } catch (err) {
+      lastErr = err;
+      const { cooldownMs, label } = classifyFailure(err);
+      cooldownUntil.set(cand.key, Date.now() + cooldownMs);
     }
   }
-  throw new Error("All configured AI models failed.");
+  throw lastErr || new Error("All configured AI providers failed.");
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, db: mongoose.connection.readyState === 1 }));
+// API Routes
+app.get("/health", (req, res) =>
+  res.json({
+    ok: true,
+    configuredProviders: PROVIDERS.map((p) => p.id),
+    lastUsed: workingCandidate ? `${workingCandidate.provider.id}/${workingCandidate.model}` : null,
+  })
+);
 
-// Email/Password Register
-app.post("/api/auth/register", async (req, res) => {
-  try {
-    const { email, password, name } = req.body;
-    if (!email || !password || !name) return res.status(400).json({ error: "All fields are required" });
-
-    const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({ error: "Email already registered" });
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.create({ email, passwordHash, name, avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${name}` });
-
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.get("/api/conversation", async (req, res) => {
+  res.json({ messages: await loadConversation() });
 });
 
-// Email/Password Login
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-      return res.status(401).json({ error: "Invalid email or password" });
-    }
-
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Enhanced Google Auth Verification Route
-app.post("/api/auth/google", async (req, res) => {
-  try {
-    const { credential } = req.body;
-    if (!credential) return res.status(400).json({ error: "Google credential token required" });
-
-    // Verify Google ID token securely via Google's official tokeninfo endpoint
-    const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
-    if (!googleRes.ok) return res.status(401).json({ error: "Invalid Google authentication token" });
-    
-    const googleData = await googleRes.json();
-    const { email, name, picture } = googleData;
-
-    let user = await User.findOne({ email });
-    if (!user) {
-      const dummyHash = await bcrypt.hash(Math.random().toString(), 10);
-      user = await User.create({ 
-        email, 
-        passwordHash: dummyHash, 
-        name: name || email.split("@")[0], 
-        avatar: picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${email}` 
-      });
-    }
-
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/auth/me", authenticateToken, (req, res) => {
-  res.json({ user: { id: req.user._id, email: req.user.email, name: req.user.name, avatar: req.user.avatar } });
-});
-
-// Scoped Sessions & Chat
-app.get("/api/sessions", authenticateToken, async (req, res) => {
-  const sessions = await Session.find({ userId: req.user._id }).select("title updatedAt").sort("-updatedAt");
-  res.json(sessions);
-});
-
-app.get("/api/sessions/:id", authenticateToken, async (req, res) => {
-  const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
-  res.json(session || { messages: [] });
-});
-
-app.delete("/api/sessions/:id", authenticateToken, async (req, res) => {
-  await Session.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+app.post("/api/conversation/clear", async (req, res) => {
+  await clearConversation();
   res.json({ ok: true });
 });
 
-app.post("/api/chat", authenticateToken, async (req, res) => {
-  const { message, sessionId } = req.body;
-  if (!message || !message.trim()) return res.status(400).json({ error: "message required" });
+app.get("/api/reminders/due", async (req, res) => {
+  const now = new Date();
+  const due = await Reminder.find({ dueAt: { $lte: now }, delivered: false });
+  for (const r of due) {
+    r.delivered = true;
+    await r.save();
+  }
+  res.json({ due });
+});
 
-  const memoryFacts = await Memory.find({ userId: req.user._id });
-  const systemText = basePersonality(memoryFacts, req.user.name);
+app.get("/api/reminders", async (req, res) => {
+  const reminders = await Reminder.find({ delivered: false }).sort({ dueAt: 1 });
+  res.json({ reminders });
+});
 
-  let session = sessionId ? await Session.findOne({ _id: sessionId, userId: req.user._id }) : null;
-  if (!session) {
-    session = await Session.create({ userId: req.user._id, title: message.substring(0, 30) + "..." });
+app.get("/api/notes", async (req, res) => {
+  const notes = await Note.find().sort({ createdAt: -1 });
+  res.json({ notes });
+});
+
+app.delete("/api/notes/:id", async (req, res) => {
+  await Note.findByIdAndDelete(req.params.id);
+  const notes = await Note.find().sort({ createdAt: -1 });
+  res.json({ notes });
+});
+
+app.delete("/api/reminders/:id", async (req, res) => {
+  await Reminder.findByIdAndDelete(req.params.id);
+  const reminders = await Reminder.find({ delivered: false }).sort({ dueAt: 1 });
+  res.json({ reminders });
+});
+
+app.get("/api/memory", async (req, res) => {
+  const facts = await Memory.find();
+  res.json({ facts });
+});
+
+app.delete("/api/memory/:id", async (req, res) => {
+  await Memory.findByIdAndDelete(req.params.id);
+  const facts = await Memory.find();
+  res.json({ facts });
+});
+
+app.post("/api/chat", async (req, res) => {
+  if (PROVIDERS.length === 0) return res.status(500).json({ error: "No AI provider configured." });
+  const { message } = req.body;
+  if (!message || !message.trim()) return res.status(400).json({ error: "message is required" });
+
+  const memoryFacts = await Memory.find();
+  const systemText = basePersonality(memoryFacts);
+
+  const history = await loadConversation();
+  history.push({ role: "user", content: message });
+
+  function windowedHistory(full) {
+    if (full.length <= HISTORY_WINDOW) return full;
+    let start = full.length - HISTORY_WINDOW;
+    while (start > 0) {
+      const m = full[start];
+      if (m.role === "tool") { start++; continue; }
+      if (m.role === "assistant" && m.tool_calls?.length) { start++; continue; }
+      break;
+    }
+    return full.slice(start);
   }
 
-  session.messages.push({ role: "user", content: message });
-  let messages = [{ role: "system", content: systemText }, ...session.messages.slice(-HISTORY_WINDOW)];
+  let messages = [{ role: "system", content: systemText }, ...windowedHistory(history)];
   const actions = [];
 
   try {
     let iterations = 0;
     let finalText = null;
+    let lastProviderId = null;
+    let lastModel = null;
 
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
-      const { message: msg } = await callAI(messages);
+      const { message: msg, providerId, model } = await callAI(messages);
+      lastProviderId = providerId;
+      lastModel = model;
+
       const toolCalls = msg.tool_calls || [];
-      
       if (toolCalls.length === 0) {
-        finalText = msg.content || "";
+        finalText = (msg.content || "").trim();
         break;
       }
 
       messages.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
-      session.messages.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
 
       for (const tc of toolCalls) {
         let args = {};
         try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
-        const { functionResponse, action } = await runTool(tc.function.name, args, req.user._id);
-        if (action) actions.push(action);
+        const { functionResponse, action } = await runTool(tc.function.name, args);
+        
+        // Save reminders/notes created via tools directly to MongoDB
+        if (tc.function.name === 'set_reminder' && args.text && args.minutes) {
+          const dueAt = new Date(Date.now() + args.minutes * 60000);
+          await Reminder.create({ text: args.text, dueAt });
+        }
+        if (tc.function.name === 'take_note' && args.text) {
+          await Note.create({ text: args.text });
+        }
+        if (tc.function.name === 'remember_fact' && args.fact) {
+          await Memory.create({ fact: args.fact });
+        }
 
-        const toolMsg = { role: "tool", tool_call_id: tc.id, name: tc.function.name, content: JSON.stringify(functionResponse) };
-        messages.push(toolMsg);
-        session.messages.push(toolMsg);
+        if (action) actions.push(action);
+        messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: JSON.stringify(functionResponse) });
       }
     }
 
     if (!finalText) finalText = "Done!";
-    session.messages.push({ role: "assistant", content: finalText });
-    session.updatedAt = Date.now();
-    await session.save();
+    history.push({ role: "assistant", content: finalText });
+    await saveConversation(history);
 
-    res.json({ reply: finalText, actions, sessionId: session._id });
+    res.json({ reply: finalText, actions, provider: lastProviderId, model: lastModel });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Aria Server listening on port ${PORT}`);
+  console.log(`Aria server listening on port ${PORT}`);
 });

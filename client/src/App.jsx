@@ -1,274 +1,530 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import NeuronField from "./NeuronField.jsx";
-import "./index.css";
 
-const TOKEN_KEY = "aria_auth_token";
-
+const SERVER_URL_KEY = "aria_server_url";
+function defaultApiBase() {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  const h = typeof window !== "undefined" ? window.location.hostname : "";
+  if (h === "localhost" || h === "127.0.0.1") return "http://localhost:3001";
+  return "";
+}
 function getApiBase() {
-  if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
-  }
-  return "http://localhost:3001";
+  if (typeof window === "undefined") return defaultApiBase();
+  return localStorage.getItem(SERVER_URL_KEY) || defaultApiBase();
+}
+function setApiBase(url) {
+  const clean = url.trim().replace(/\/+$/, "");
+  if (clean) localStorage.setItem(SERVER_URL_KEY, clean);
+  else localStorage.removeItem(SERVER_URL_KEY);
 }
 
 const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
 
-function cleanTextForSpeech(text) {
-  if (!text) return "";
-  let cleaned = text;
-  cleaned = cleaned.replace(/```[\s\S]*?```/g, " I have provided the code on your screen. ");
-  cleaned = cleaned.replace(/`([^`]+)`/g, "$1");
-  cleaned = cleaned.replace(/[#*_[\]()!~`>-]/g, " ");
-  cleaned = cleaned.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDDFF])/g, "");
-  return cleaned.replace(/\s+/g, " ").trim();
+const SITE_MAP = {
+  youtube: "https://www.youtube.com",
+  gmail: "https://mail.google.com",
+  google: "https://www.google.com",
+  maps: "https://maps.google.com",
+  "google maps": "https://maps.google.com",
+  drive: "https://drive.google.com",
+  "google drive": "https://drive.google.com",
+  calendar: "https://calendar.google.com",
+  github: "https://github.com",
+  linkedin: "https://linkedin.com",
+  leetcode: "https://leetcode.com",
+  chatgpt: "https://chat.openai.com",
+  netflix: "https://netflix.com",
+  spotify: "https://open.spotify.com",
+  amazon: "https://amazon.in",
+  whatsapp: "https://wa.me/",
+  instagram: "https://instagram.com",
+  facebook: "https://facebook.com",
+  twitter: "https://x.com",
+  x: "https://x.com",
+  telegram: "https://t.me",
+  reddit: "https://reddit.com",
+  twitch: "https://twitch.tv",
+  discord: "https://discord.com/app",
+  notion: "https://notion.so",
+  zoom: "https://zoom.us/join",
+  flipkart: "https://flipkart.com",
+  swiggy: "https://swiggy.com",
+  zomato: "https://zomato.com",
+  playstore: "https://play.google.com/store",
+  "play store": "https://play.google.com/store",
+  news: "https://news.google.com",
+  translate: "https://translate.google.com",
+  photos: "https://photos.google.com",
+};
+
+function tryOfflineCommand(raw) {
+  const text = raw.toLowerCase().trim();
+  let m = text.match(/^(?:open|launch|go to|start)\s+(.+)/);
+  if (m) {
+    let target = m[1].replace(/[.?!]+$/, "").trim();
+    if (/\bplay\b/.test(target)) return null;
+    if (SITE_MAP[target]) {
+      const r = openTab(SITE_MAP[target]);
+      return r.blocked ? blockedMsg(r.url) : `Opening ${target}.`;
+    }
+    if (/^[\w-]+\.[a-z]{2,}$/i.test(target)) {
+      const r = openTab("https://" + target);
+      return r.blocked ? blockedMsg(r.url) : `Opening ${target}.`;
+    }
+    const r = openTab("https://www.google.com/search?q=" + encodeURIComponent(target));
+    return r.blocked ? blockedMsg(r.url) : `Searched Google for "${target}".`;
+  }
+
+  m = text.match(/^search (?:google|the web) for (.+)/);
+  if (m) {
+    const r = openTab("https://www.google.com/search?q=" + encodeURIComponent(m[1]));
+    return r.blocked ? blockedMsg(r.url) : `Here's what I found for "${m[1]}".`;
+  }
+  m = text.match(/^search youtube for (.+)/);
+  if (m) {
+    const r = openTab("https://www.youtube.com/results?search_query=" + encodeURIComponent(m[1]));
+    return r.blocked ? blockedMsg(r.url) : `Searching YouTube for "${m[1]}".`;
+  }
+
+  return null;
+}
+
+function blockedMsg(url) {
+  return `Your browser blocked that popup. Tap to open: ${url}`;
+}
+
+function openTab(url) {
+  const win = window.open(url, "_blank");
+  if (!win || win.closed || typeof win.closed === "undefined") {
+    return { blocked: true, url };
+  }
+  return { blocked: false, url };
+}
+
+function linkify(text) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a key={i} href={part} target="_blank" rel="noopener noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    )
+  );
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
-  const [user, setUser] = useState(null);
-  const [authMode, setAuthMode] = useState("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [authError, setAuthError] = useState("");
-
-  const [sessions, setSessions] = useState([]);
-  const [currentSessionId, setCurrentSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-  const [state, setState] = useState("idle"); 
+  const [state, setState] = useState("idle");
+  const [wakeOn, setWakeOn] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);
-  
+  const [busy, setBusy] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [panelTab, setPanelTab] = useState("chats");
-  
+  const [panelTab, setPanelTab] = useState("reminders");
+  const [reminders, setReminders] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [memoryFacts, setMemoryFacts] = useState([]);
+  const [activeProvider, setActiveProvider] = useState(null);
+  const [configuredProviders, setConfiguredProviders] = useState([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [serverUrlInput, setServerUrlInput] = useState(getApiBase());
+  const [connected, setConnected] = useState(null);
+
+  const recognitionRef = useRef(null);
+  const continuousRef = useRef(false);
+  const awaitingCommandRef = useRef(false);
   const chatEndRef = useRef(null);
-  const googleBtnRef = useRef(null);
   const voiceOnRef = useRef(true);
   const busyRef = useRef(false);
+  const pushToTalkActiveRef = useRef(false);
+  const restartTimerRef = useRef(null);
+  const lastModelRef = useRef(null);
 
   useEffect(() => { voiceOnRef.current = voiceOn; }, [voiceOn]);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   useEffect(() => {
-    if (token) {
-      fetch(`${getApiBase()}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` }
+    fetch(`${getApiBase()}/api/conversation`)
+      .then((r) => r.json())
+      .then((data) => {
+        const stored = data.messages || [];
+        setMessages([
+          { role: "system", content: 'Aria is ready. Type a message, tap talk, or turn on wake-word listening.' },
+          ...stored,
+        ]);
       })
-      .then(res => res.json())
-      .then(data => {
-        if (data.user) {
-          setUser(data.user);
-          loadSessions();
-        } else {
-          logout();
+      .catch(() => {
+        addMsg("system", "Couldn't reach the server — check your backend deployment URL.");
+      });
+
+    fetch(`${getApiBase()}/health`)
+      .then((r) => r.json())
+      .then((data) => {
+        setConnected(true);
+        setConfiguredProviders(data.configuredProviders || []);
+        if (data.configuredProviders?.length === 0) {
+          addMsg("system", "No AI provider is configured yet — add API keys to your server environment variables.");
+        }
+        if (data.lastUsed) {
+          setActiveProvider(data.lastUsed);
+          lastModelRef.current = data.lastUsed;
         }
       })
-      .catch(() => logout());
-    }
-  }, [token]);
+      .catch(() => {
+        setConnected(false);
+        addMsg("system", `Can't reach the Aria server at ${getApiBase() || "(same origin)"}.`);
+      });
 
-  // Initialize Google Sign-In SDK Button
+    if (!window.isSecureContext) {
+      addMsg("system", "This page isn't on a secure context (HTTPS required for microphone permissions in production).");
+    } else if (!SR) {
+      addMsg("system", "This browser doesn't support voice input — use Chrome or Edge for full microphone functionality.");
+    }
+  }, []);
+
   useEffect(() => {
-    if (!user && window.google) {
+    async function refreshPanel() {
       try {
-        window.google.accounts.id.initialize({
-          client_id: "68678936458-6taocclfu3v4q5tcp4vj5tm7t0c97bqr.apps.googleusercontent.com", // Replace with your Google OAuth Client ID if desired, or let it prompt
-          callback: handleGoogleResponse,
+        const [r, n, m] = await Promise.all([
+          fetch(`${getApiBase()}/api/reminders`).then((res) => res.json()),
+          fetch(`${getApiBase()}/api/notes`).then((res) => res.json()),
+          fetch(`${getApiBase()}/api/memory`).then((res) => res.json()),
+        ]);
+        setReminders(r.reminders || []);
+        setNotes(n.notes || []);
+        setMemoryFacts(m.facts || []);
+      } catch {}
+    }
+    async function checkDue() {
+      try {
+        const res = await fetch(`${getApiBase()}/api/reminders/due`);
+        const data = await res.json();
+        (data.due || []).forEach((r) => {
+          const text = `Reminder: ${r.text}`;
+          addMsg("assistant", text);
+          if (voiceOnRef.current && !busyRef.current) speak(text);
         });
-        if (googleBtnRef.current) {
-          window.google.accounts.id.renderButton(googleBtnRef.current, {
-            theme: "outline",
-            size: "large",
-            width: "100%",
-          });
-        }
-      } catch (e) {
-        console.warn("Google SDK failed to load:", e);
-      }
+        if ((data.due || []).length) refreshPanel();
+      } catch {}
     }
-  }, [user, authMode]);
+    refreshPanel();
+    const dueInterval = setInterval(checkDue, 20000);
+    const panelInterval = setInterval(refreshPanel, 15000);
+    return () => {
+      clearInterval(dueInterval);
+      clearInterval(panelInterval);
+    };
+  }, []);
 
-  async function handleGoogleResponse(response) {
-    setAuthError("");
-    try {
-      const res = await fetch(`${getApiBase()}/api/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: response.credential })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Google authentication failed");
-      
-      localStorage.setItem(TOKEN_KEY, data.token);
-      setToken(data.token);
-      setUser(data.user);
-      loadSessions();
-    } catch (err) {
-      setAuthError(err.message);
-    }
+  function addMsg(role, content) {
+    setMessages((prev) => [...prev, { role, content }]);
   }
 
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setUser(null);
-  }
+  function speak(text, force) {
+    if ((!voiceOnRef.current && !force) || !window.speechSynthesis) {
+      if (!force) setState("idle");
+      return;
+    }
 
-  async function handleAuth(e) {
-    e.preventDefault();
-    setAuthError("");
-    const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
-    try {
-      const res = await fetch(`${getApiBase()}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Authentication failed");
-      
-      localStorage.setItem(TOKEN_KEY, data.token);
-      setToken(data.token);
-      setUser(data.user);
-      loadSessions();
-    } catch (err) {
-      setAuthError(err.message);
+    const doSpeak = () => {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const voices = window.speechSynthesis.getVoices();
+      const preferred =
+        voices.find((v) => /Google UK English Female|Samantha|Google US English/i.test(v.name)) ||
+        voices.find((v) => v.lang === "en-US");
+      if (preferred) u.voice = preferred;
+      u.rate = 1.02;
+      u.onstart = () => setState("speaking");
+      u.onend = () => setState("idle");
+      u.onerror = (e) => {
+        addMsg("system", `Voice output failed: ${e.error}.`);
+        setState("idle");
+      };
+      window.speechSynthesis.speak(u);
+    };
+
+    if (window.speechSynthesis.getVoices().length === 0) {
+      const onVoices = () => {
+        window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
+        doSpeak();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", onVoices);
+      setTimeout(() => {
+        window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
+        doSpeak();
+      }, 400);
+    } else {
+      doSpeak();
     }
   }
 
-  async function loadSessions() {
-    try {
-      const res = await fetch(`${getApiBase()}/api/sessions`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setSessions(Array.isArray(data) ? data : []);
-      if (data.length > 0 && !currentSessionId) loadSession(data[0]._id);
-      else if (data.length === 0) startNewSession();
-    } catch {}
-  }
-
-  async function loadSession(id) {
-    try {
-      const res = await fetch(`${getApiBase()}/api/sessions/${id}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setMessages(data.messages || []);
-      setCurrentSessionId(data._id);
-      setPanelOpen(false);
-    } catch {}
-  }
-
-  function startNewSession() {
-    setCurrentSessionId(null);
-    setMessages([{ role: "system", content: `Welcome back, ${user?.name || "Friend"}! How can I help you today?` }]);
-    setPanelOpen(false);
-  }
-
-  async function deleteSession(id, e) {
-    e.stopPropagation();
-    await fetch(`${getApiBase()}/api/sessions/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` }
+  async function callAria(message) {
+    const res = await fetch(`${getApiBase()}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
     });
-    if (currentSessionId === id) startNewSession();
-    loadSessions();
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || `Server responded ${res.status}`);
+    }
+    return res.json();
   }
 
-  function speak(text) {
-    if (!voiceOnRef.current || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    
-    const spokenText = cleanTextForSpeech(text);
-    const u = new SpeechSynthesisUtterance(spokenText);
-    
-    u.onstart = () => setState("speaking");
-    u.onend = () => setState("idle");
-    u.onerror = () => setState("idle");
-    window.speechSynthesis.speak(u);
-  }
+  async function handleIncoming(text, fromVoice) {
+    if (!text || !text.trim() || busyRef.current) return;
+    addMsg("user", text);
 
-  async function handleIncoming(text) {
-    if (!text.trim() || busyRef.current) return;
-    setMessages(prev => [...prev, { role: "user", content: text }]);
-    busyRef.current = true;
+    const offlineReply = tryOfflineCommand(text);
+    if (offlineReply) {
+      addMsg("assistant", offlineReply);
+      if (fromVoice) speak(offlineReply);
+      else setState("idle");
+      return;
+    }
+
+    setBusy(true);
     setState("thinking");
-
     try {
-      const res = await fetch(`${getApiBase()}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ message: text, sessionId: currentSessionId })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const { reply, actions, provider, model } = await callAria(text);
 
-      if (data.sessionId && data.sessionId !== currentSessionId) {
-        setCurrentSessionId(data.sessionId);
-        loadSessions();
+      const combined = provider && model ? `${provider}/${model}` : null;
+      if (combined && lastModelRef.current && combined !== lastModelRef.current) {
+        addMsg("system", `🔄 Switched AI provider to ${combined}`);
+      }
+      if (combined) {
+        lastModelRef.current = combined;
+        setActiveProvider(combined);
       }
 
-      (data.actions || []).forEach(a => {
-        if (a.type === "open_url") window.open(a.url, "_blank");
+      (actions || []).forEach((a) => {
+        if (a.type === "open_url") {
+          const r = openTab(a.url);
+          if (r.blocked) addMsg("system", blockedMsg(a.url));
+        }
       });
 
-      setMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
-      speak(data.reply);
-    } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "Sorry, I encountered an error." }]);
-      setState("idle");
+      addMsg("assistant", reply);
+      if (fromVoice) speak(reply);
+      else setState("idle");
+
+      Promise.all([
+        fetch(`${getApiBase()}/api/reminders`).then((r) => r.json()).catch(() => null),
+        fetch(`${getApiBase()}/api/notes`).then((r) => r.json()).catch(() => null),
+      ]).then(([r, n]) => {
+        if (r) setReminders(r.reminders || []);
+        if (n) setNotes(n.notes || []);
+      });
+    } catch (err) {
+      addMsg("system", "Error: " + err.message);
+      const msg = "Sorry — I hit a snag reaching my brain. Mind trying that again?";
+      addMsg("assistant", msg);
+      if (fromVoice) speak(msg);
+      else setState("idle");
     }
-    busyRef.current = false;
+    setBusy(false);
   }
 
-  function startListening() {
-    if (!SR) return alert("Speech Recognition not supported in this browser.");
+  function makeRecognizer(continuous) {
+    if (!SR) return null;
     const r = new SR();
-    r.onstart = () => setState("listening");
+    r.continuous = continuous;
+    r.interimResults = false;
+    r.lang = "en-US";
+    return r;
+  }
+
+  function explainSpeechError(errorCode) {
+    switch (errorCode) {
+      case "not-allowed":
+      case "permission-denied":
+        return 'Mic access is blocked. Check your browser site permissions.';
+      case "audio-capture":
+        return "No microphone was found.";
+      case "no-speech":
+        return null;
+      case "network":
+        return "Speech recognition network error.";
+      case "aborted":
+        return null;
+      default:
+        return `Mic error: ${errorCode || "unknown"}.`;
+    }
+  }
+
+  function startPushToTalk() {
+    if (!SR) return;
+    if (busyRef.current || state === "listening" || pushToTalkActiveRef.current) return;
+
+    const wasContinuous = continuousRef.current;
+    if (wasContinuous && recognitionRef.current) {
+      continuousRef.current = false;
+      recognitionRef.current.onend = null;
+      try { recognitionRef.current.stop(); } catch {}
+    }
+
+    pushToTalkActiveRef.current = true;
+    const r = makeRecognizer(false);
+
+    const resumeWakeWordIfNeeded = () => {
+      pushToTalkActiveRef.current = false;
+      if (wasContinuous && wakeOn) {
+        restartTimerRef.current = setTimeout(() => startContinuousListening(), 250);
+      }
+    };
+
     r.onresult = (e) => {
       const transcript = e.results[0][0].transcript;
-      handleIncoming(transcript);
+      handleIncoming(transcript, true);
     };
-    r.onerror = () => setState("idle");
-    r.onend = () => setState("idle");
-    r.start();
+    r.onerror = (e) => {
+      const msg = explainSpeechError(e.error);
+      if (msg) addMsg("system", msg);
+      setState("idle");
+    };
+    r.onend = () => {
+      setState((s) => (s === "listening" ? "idle" : s));
+      resumeWakeWordIfNeeded();
+    };
+
+    setState("listening");
+    try {
+      r.start();
+    } catch (err) {
+      setState("idle");
+      resumeWakeWordIfNeeded();
+    }
   }
 
-  if (!user) {
-    return (
-      <div className="auth-container">
-        <div className="auth-box">
-          <h1>ARIA AI</h1>
-          <p>Your Intelligent Voice Companion</p>
-          
-          <form onSubmit={handleAuth}>
-            {authError && <div className="auth-error">{authError}</div>}
-            {authMode === "register" && (
-              <input type="text" placeholder="Full Name" value={name} onChange={e => setName(e.target.value)} required />
-            )}
-            <input type="email" placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)} required />
-            <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />
-            
-            <button type="submit" className="primary-btn">
-              {authMode === "login" ? "Sign In" : "Register"}
-            </button>
-            
-            {/* Real Google Sign In Button Container */}
-            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center', marginBottom: '14px', width: '100%' }}></div>
-
-            <p className="auth-switch" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
-              {authMode === "login" ? "Need an account? Register" : "Already have an account? Sign In"}
-            </p>
-          </form>
-        </div>
-      </div>
-    );
+  function testVoiceOutput() {
+    addMsg("system", "Testing voice output…");
+    speak("This is a voice test. If you can hear this, text to speech is working.", true);
   }
+
+  function startContinuousListening() {
+    if (!SR) return;
+    const r = makeRecognizer(true);
+    recognitionRef.current = r;
+    continuousRef.current = true;
+    setState((s) => (s === "listening" || s === "speaking" || s === "thinking" ? s : "idle"));
+
+    const scheduleRestart = (delay) => {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = setTimeout(() => {
+        if (continuousRef.current && !pushToTalkActiveRef.current) {
+          try { r.start(); } catch {}
+        }
+      }, delay);
+    };
+
+    r.onresult = (e) => {
+      const last = e.results[e.results.length - 1];
+      if (!last.isFinal) return;
+      const transcript = last[0].transcript.trim();
+      const lower = transcript.toLowerCase();
+
+      if (awaitingCommandRef.current) {
+        awaitingCommandRef.current = false;
+        handleIncoming(transcript, true);
+        return;
+      }
+      if (lower.includes("aria")) {
+        const idx = lower.indexOf("aria");
+        const after = transcript.slice(idx + 4).replace(/^[,.\s]+/, "");
+        if (after.length > 2) {
+          handleIncoming(after, true);
+        } else {
+          awaitingCommandRef.current = true;
+          setState("listening");
+          speak("Yeah?");
+        }
+      }
+    };
+    r.onend = () => {
+      if (continuousRef.current && !pushToTalkActiveRef.current) scheduleRestart(300);
+    };
+    r.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "audio-capture") {
+        setWakeOn(false);
+        continuousRef.current = false;
+        return;
+      }
+      if (continuousRef.current && !pushToTalkActiveRef.current) scheduleRestart(500);
+    };
+    try {
+      r.start();
+    } catch (err) {
+      setWakeOn(false);
+      continuousRef.current = false;
+    }
+  }
+
+  function toggleWakeWord() {
+    if (!wakeOn) {
+      if (!SR) return;
+      addMsg("system", 'Wake-word listening on — say "Aria" any time.');
+      setWakeOn(true);
+      startContinuousListening();
+    } else {
+      addMsg("system", "Wake-word listening off.");
+      setWakeOn(false);
+      continuousRef.current = false;
+      clearTimeout(restartTimerRef.current);
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      }
+      setState("idle");
+    }
+  }
+
+  function onSend() {
+    const val = input;
+    setInput("");
+    handleIncoming(val, false);
+  }
+
+  async function onClearConversation() {
+    await fetch(`${getApiBase()}/api/conversation/clear`, { method: "POST" }).catch(() => {});
+    setMessages([{ role: "system", content: "Conversation cleared." }]);
+  }
+
+  async function onDeleteMemoryFact(id) {
+    setMemoryFacts((prev) => prev.filter((f) => f.id !== id));
+    try {
+      const res = await fetch(`${getApiBase()}/api/memory/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      setMemoryFacts(data.facts || []);
+    } catch {}
+  }
+
+  function onSaveSettings() {
+    setApiBase(serverUrlInput);
+    setSettingsOpen(false);
+    setConnected(null);
+    fetch(`${getApiBase()}/health`)
+      .then((r) => r.json())
+      .then((data) => {
+        setConnected(true);
+        setConfiguredProviders(data.configuredProviders || []);
+      })
+      .catch(() => setConnected(false));
+  }
+
+  const orbLabel =
+    state === "listening"
+      ? "Listening…"
+      : state === "thinking"
+      ? "Thinking…"
+      : state === "speaking"
+      ? "Speaking…"
+      : wakeOn
+      ? 'Say "Aria" to wake me'
+      : "Tap talk or type below";
 
   return (
     <div className="app">
@@ -276,35 +532,56 @@ export default function App() {
 
       <header>
         <div className="brand">
-          <img src={user.avatar} alt="Avatar" className="user-avatar" />
-          <div>
-            <h1>ARIA</h1>
-            <span>{user.name}</span>
-          </div>
+          <h1>ARIA</h1>
+          <span>your voice companion</span>
         </div>
         <div className="header-right">
-          <button className="panel-toggle" onClick={() => setPanelOpen(!panelOpen)}>🗒️ Menu</button>
-          <button className="panel-toggle logout-btn" onClick={logout}>Logout</button>
+          {activeProvider && (
+            <div className="provider-pill" title={`${configuredProviders.length} provider(s) configured`}>
+              ⚡ {activeProvider}
+            </div>
+          )}
+          <button className="panel-toggle" onClick={() => setPanelOpen((v) => !v)}>
+            🗒️ {reminders.length + notes.length + memoryFacts.length > 0 ? `(${reminders.length + notes.length + memoryFacts.length})` : ""}
+          </button>
+          <button className="panel-toggle icon-btn" onClick={() => { setServerUrlInput(getApiBase()); setSettingsOpen(true); }} title="Settings">
+            ⚙️
+          </button>
           <div className="status-pill">
-            <span className={`status-dot ${state}`}></span>
-            <span>{state}</span>
+            <span className={`status-dot ${connected === false ? "offline" : state !== "idle" ? state : ""}`}></span>
+            <span>{connected === false ? "offline" : state}</span>
           </div>
         </div>
       </header>
 
       <main>
         <section className="orb-panel">
-          <div className="orb-wrap" onClick={startListening}>
-            <div className={`orb-ring ${state !== "idle" ? "active" : ""}`}></div>
-            <div className={`orb ${state}`}>
+          <div className="orb-wrap">
+            <div className={`orb-ring ${state === "listening" || state === "speaking" ? "active" : ""} ${state === "speaking" ? "speaking" : ""}`}></div>
+            <div className={`orb-ring ${state === "listening" || state === "speaking" ? "active" : ""} ${state === "speaking" ? "speaking" : ""}`}></div>
+            <div className={`orb ${state === "listening" ? "listening" : ""} ${state === "speaking" ? "speaking" : ""}`}>
               <div className="orb-core"></div>
             </div>
           </div>
-          <div className="orb-label">{state === "idle" ? "Tap to speak" : state}</div>
+          <div className="orb-label">{orbLabel}</div>
 
           <div className="controls">
-            <button className="primary" onClick={startListening}>🎙️ Tap to Talk</button>
-            <button onClick={() => setVoiceOn(!voiceOn)}>🔊 Voice: {voiceOn ? "ON" : "OFF"}</button>
+            <button className="primary" onClick={startPushToTalk}>🎙️ Tap to Talk</button>
+            <div className="toggle-row">
+              <span>Wake-word listening</span>
+              <div className={`switch ${wakeOn ? "on" : ""}`} onClick={toggleWakeWord}></div>
+            </div>
+            <div className="toggle-row">
+              <span>Voice replies</span>
+              <div className={`switch ${voiceOn ? "on" : ""}`} onClick={() => setVoiceOn((v) => !v)}></div>
+            </div>
+            <button onClick={testVoiceOutput}>🔊 Test voice output</button>
+            <button onClick={onClearConversation}>🗑️ Clear conversation</button>
+          </div>
+
+          <div className="hint">
+            Try: <b>"Aria, what's the weather in Chennai"</b>, <b>"remind me to drink water in 20 minutes"</b>,
+            <b> "open YouTube and play believer"</b>
           </div>
         </section>
 
@@ -312,25 +589,8 @@ export default function App() {
           <div className="chat-log">
             {messages.map((m, i) => (
               <div key={i} className={`msg ${m.role}`}>
-                {m.role !== "system" && <span className="tag">{m.role === "user" ? user.name : "ARIA"}</span>}
-                <div>
-                  <ReactMarkdown
-                    components={{
-                      code({ node, inline, className, children, ...props }) {
-                        const match = /language-(\w+)/.exec(className || "");
-                        return !inline && match ? (
-                          <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div" {...props}>
-                            {String(children).replace(/\n$/, "")}
-                          </SyntaxHighlighter>
-                        ) : (
-                          <code {...props}>{children}</code>
-                        );
-                      },
-                    }}
-                  >
-                    {m.content}
-                  </ReactMarkdown>
-                </div>
+                {m.role !== "system" && <span className="tag">{m.role === "user" ? "YOU" : "ARIA"}</span>}
+                <div>{linkify(m.content)}</div>
               </div>
             ))}
             <div ref={chatEndRef} />
@@ -338,33 +598,64 @@ export default function App() {
           <div className="composer">
             <input
               type="text"
-              placeholder="Type a message..."
+              placeholder="Type instead of talking…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && (handleIncoming(input), setInput(""))}
+              onKeyDown={(e) => e.key === "Enter" && onSend()}
             />
-            <button onClick={() => (handleIncoming(input), setInput(""))}>➤</button>
+            <button className={`mic ${state === "listening" ? "active" : ""}`} onClick={startPushToTalk} title="Tap to talk">🎤</button>
+            <button onClick={onSend} title="Send">➤</button>
           </div>
         </section>
 
         {panelOpen && (
           <aside className="side-panel">
             <div className="side-panel-header">
-              <span>Dashboard</span>
+              <span>Your Aria</span>
               <button className="close-btn" onClick={() => setPanelOpen(false)}>✕</button>
             </div>
-            
             <div className="panel-tabs">
-              <button className={panelTab === "chats" ? "active" : ""} onClick={() => setPanelTab("chats")}>History</button>
+              <button className={panelTab === "reminders" ? "active" : ""} onClick={() => setPanelTab("reminders")}>
+                Reminders {reminders.length > 0 && `(${reminders.length})`}
+              </button>
+              <button className={panelTab === "notes" ? "active" : ""} onClick={() => setPanelTab("notes")}>
+                Notes {notes.length > 0 && `(${notes.length})`}
+              </button>
+              <button className={panelTab === "memory" ? "active" : ""} onClick={() => setPanelTab("memory")}>
+                Memory {memoryFacts.length > 0 && `(${memoryFacts.length})`}
+              </button>
             </div>
 
-            {panelTab === "chats" && (
+            {panelTab === "reminders" && (
               <div className="side-panel-section">
-                <button onClick={startNewSession} className="new-chat-btn">+ New Chat</button>
-                {sessions.map(s => (
-                  <div key={s._id} className="side-item memory-item" onClick={() => loadSession(s._id)}>
-                    <span>{s.title}</span>
-                    <button className="forget-btn" onClick={(e) => deleteSession(s._id, e)}>✕</button>
+                {reminders.length === 0 && <p className="empty">Nothing pending</p>}
+                {reminders.map((r) => (
+                  <div key={r.id || r._id} className="side-item">
+                    <span>{r.text}</span>
+                    <span className="side-item-meta">{new Date(r.dueAt).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {panelTab === "notes" && (
+              <div className="side-panel-section">
+                {notes.length === 0 && <p className="empty">Nothing saved</p>}
+                {notes.map((n) => (
+                  <div key={n.id || n._id} className="side-item">
+                    <span>{n.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {panelTab === "memory" && (
+              <div className="side-panel-section">
+                {memoryFacts.length === 0 && <p className="empty">Nothing yet</p>}
+                {memoryFacts.map((f) => (
+                  <div key={f.id || f._id} className="side-item memory-item">
+                    <span>{f.fact}</span>
+                    <button className="forget-btn" onClick={() => onDeleteMemoryFact(f.id || f._id)} title="Forget this">✕</button>
                   </div>
                 ))}
               </div>
@@ -372,6 +663,26 @@ export default function App() {
           </aside>
         )}
       </main>
+
+      {settingsOpen && (
+        <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Settings</h3>
+            <label className="modal-label">Aria server URL</label>
+            <input
+              type="text"
+              className="modal-input"
+              value={serverUrlInput}
+              onChange={(e) => setServerUrlInput(e.target.value)}
+              placeholder="https://your-backend.onrender.com"
+            />
+            <div className="modal-actions">
+              <button onClick={() => setSettingsOpen(false)}>Cancel</button>
+              <button className="primary" onClick={onSaveSettings}>Save & Reconnect</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
