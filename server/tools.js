@@ -1,5 +1,3 @@
-import { Memory, Reminder, Note } from "./models.js";
-
 export const TOOLS = [
   {
     type: "function",
@@ -94,18 +92,15 @@ export async function runTool(name, args, userId) {
 
   if (name === "set_reminder") {
     const dueAt = new Date(Date.now() + (args.delayMinutes || 1) * 60000);
-    const reminder = await Reminder.create({ userId, text: args.text, dueAt, delivered: false });
-    return { functionResponse: { status: "success", reminder } };
+    return { functionResponse: { status: "success", text: args.text, dueAt } };
   }
 
   if (name === "save_note") {
-    const note = await Note.create({ userId, text: args.text });
-    return { functionResponse: { status: "success", note } };
+    return { functionResponse: { status: "success", text: args.text } };
   }
 
   if (name === "remember_fact") {
-    const fact = await Memory.create({ userId, fact: args.fact });
-    return { functionResponse: { status: "success", fact } };
+    return { functionResponse: { status: "success", fact: args.fact } };
   }
 
   if (name === "get_weather") {

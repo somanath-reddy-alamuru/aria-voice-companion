@@ -8,6 +8,7 @@
 body, html, #root {
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   background-color: #030712;
   color: #f3f4f6;
   overflow: hidden;
@@ -17,6 +18,7 @@ body, html, #root {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   position: relative;
 }
 
@@ -372,6 +374,7 @@ main {
   align-items: center;
   justify-content: center;
   height: 100vh;
+  height: 100dvh;
   background: #030712;
   padding: 20px;
 }
@@ -436,6 +439,6 @@ main {
 @media (max-width: 768px) {
   main { flex-direction: column !important; }
   .orb-panel { min-height: 220px; padding: 10px; border-right: none; border-bottom: 1px solid #1f2937; }
-  .chat-panel { height: calc(100vh - 280px); }
-  .side-panel { position: absolute; right: 0; top: 55px; height: calc(100vh - 55px); width: 100%; }
+  .chat-panel { height: calc(100dvh - 280px); }
+  .side-panel { position: absolute; right: 0; top: 55px; height: calc(100dvh - 55px); width: 100%; }
 }

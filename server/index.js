@@ -8,20 +8,23 @@ import { TOOLS, runTool } from "./tools.js";
 dotenv.config();
 
 const app = express();
-app.use(cors()); // Completely open CORS to eliminate preflight or blocking errors
+app.use(cors({
+  origin: process.env.CLIENT_URL || '*',
+  credentials: true
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const MAX_TOOL_ITERATIONS = 6;
 const HISTORY_WINDOW = 28;
 
-// --- MONGODB ATLAS CLOUD CONNECTION ---
-mongoose.connect(process.env.MONGO_URI, {
+// --- MONGODB ATLAS CONNECTION FOR CLOUD PERSISTENCE ---
+mongoose.connect(process.env.MONGO_URI || process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 }).then(() => console.log('MongoDB Atlas Connected Successfully')).catch(err => console.error('MongoDB Connection Error:', err));
 
-// Database Schemas with OverwriteModelError protection
+// Database Schemas with OverwriteModelError protection for cloud deployments
 const conversationSchema = new mongoose.Schema({
   messages: [{
     role: { type: String, required: true },
@@ -69,7 +72,7 @@ async function clearConversation() {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-Provider AI Failover Pool
+// Multi-provider AI backend pool
 // ---------------------------------------------------------------------------
 const PROVIDERS = [
   {
@@ -131,10 +134,11 @@ function basePersonality(memoryFacts) {
     ? `\n\nThings you know about the user from past conversations:\n` + memoryFacts.map((m) => `- ${m.fact}`).join("\n")
     : "";
   return `You are Aria, a warm, emotionally intelligent voice-and-agentic companion for a college student (final-year CS, targeting software placements). You have four jobs:
-1) Be a genuine conversational partner — casual chat, encouragement, thinking out loud.
-2) On request, run realistic HR/behavioral mock-interview practice: ask one question at a time, listen to the answer, then give short, specific feedback.
-3) Act as an agent: when the user asks you to open websites, search, check weather, time, notes, reminders, calculations, or tools, execute them accurately.
-4) Keep replies concise (2-5 sentences) unless asked for depth. Speak naturally with contractions, no bullet points or markdown syntax.${memoryBlock}`;
+1) Be a genuine conversational partner — casual chat, encouragement, thinking out loud, like a sharp, friendly human.
+2) On request, run realistic HR/behavioral mock-interview practice: ask one question at a time, listen to the answer, then give short, specific, encouraging feedback before the next question.
+3) Act as an agent: when the user asks you to open something, play something, search, check weather/time/news/currency, do math, convert units, translate something, look something up, set or cancel a reminder, jot down or delete a note, draft an email, get directions, generate a password or QR code, shorten a link, tell a joke, roll dice, or flip a coin — use your tools to actually do it, then confirm briefly and naturally.
+4) Be genuinely useful as a general-purpose assistant: answer factual/coding/study questions directly and reach for a tool whenever it gets a more accurate or current answer.
+Speak the way a smart, kind friend would talk out loud — contractions, short sentences, no bullet points or markdown. Keep replies concise (2-5 sentences) unless asked for depth.${memoryBlock}`;
 }
 
 async function callOpenAICompatible(provider, model, messages) {
@@ -402,8 +406,8 @@ app.post("/api/chat", async (req, res) => {
         try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
         const { functionResponse, action } = await runTool(tc.function.name, args);
         
-        if (tc.function.name === 'set_reminder' && args.text && args.minutes) {
-          const dueAt = new Date(Date.now() + args.minutes * 60000);
+        if (tc.function.name === 'set_reminder' && args.text && args.delayMinutes) {
+          const dueAt = new Date(Date.now() + args.delayMinutes * 60000);
           await Reminder.create({ text: args.text, dueAt });
         }
         if (tc.function.name === 'take_note' && args.text) {
