@@ -1,121 +1,439 @@
+/*
+  Aria tools.
+
+  Important design rule:
+  These tools are executed ONLY when the model actually requests them.
+
+  Simple deterministic operations such as calculator/time/opening common
+  websites are handled by the frontend and therefore do NOT consume an LLM
+  request.
+
+  Database persistence is handled by server/index.js.
+*/
+
 export const TOOLS = [
   {
     type: "function",
     function: {
-      name: "open_app_or_url",
-      description: "Open a website or application URL.",
-      parameters: {
-        type: "object",
-        properties: { target: { type: "string" } },
-        required: ["target"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "set_reminder",
-      description: "Set a reminder or alarm.",
+      description:
+        "Create a reminder. Use this when the user explicitly asks you to remind them about something later.",
       parameters: {
         type: "object",
         properties: {
-          text: { type: "string" },
-          delayMinutes: { type: "number" },
+          text: {
+            type: "string",
+            description: "What the user should be reminded about.",
+          },
+          delayMinutes: {
+            type: "number",
+            description:
+              "Number of minutes from now until the reminder is due.",
+          },
         },
         required: ["text", "delayMinutes"],
       },
     },
   },
+
   {
     type: "function",
     function: {
       name: "save_note",
-      description: "Save a note.",
+      description:
+        "Save a note when the user explicitly asks you to take, save, or write a note.",
       parameters: {
         type: "object",
-        properties: { text: { type: "string" } },
+        properties: {
+          text: {
+            type: "string",
+            description: "The note to save.",
+          },
+        },
         required: ["text"],
       },
     },
   },
+
   {
     type: "function",
     function: {
       name: "remember_fact",
-      description: "Remember a long-term fact about the user.",
+      description:
+        "Remember a long-term fact when the user explicitly asks you to remember it.",
       parameters: {
         type: "object",
-        properties: { fact: { type: "string" } },
+        properties: {
+          fact: {
+            type: "string",
+            description: "The fact to remember.",
+          },
+        },
         required: ["fact"],
       },
     },
   },
+
   {
     type: "function",
     function: {
       name: "get_weather",
-      description: "Get weather for a city.",
+      description:
+        "Get current weather for a requested city or location.",
       parameters: {
         type: "object",
-        properties: { location: { type: "string" } },
+        properties: {
+          location: {
+            type: "string",
+            description: "City or location.",
+          },
+        },
         required: ["location"],
       },
     },
   },
+
   {
     type: "function",
     function: {
       name: "calculate",
-      description: "Evaluate a mathematical expression.",
+      description:
+        "Calculate a mathematical expression when the user needs a calculation.",
       parameters: {
         type: "object",
-        properties: { expression: { type: "string" } },
+        properties: {
+          expression: {
+            type: "string",
+            description: "Mathematical expression.",
+          },
+        },
         required: ["expression"],
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "open_app_or_url",
+      description:
+        "Open a website or URL when the user explicitly asks to open it.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: {
+            type: "string",
+            description: "Website or URL to open.",
+          },
+        },
+        required: ["target"],
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "search_web",
+      description:
+        "Search the web when current or external information is required.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query.",
+          },
+        },
+        required: ["query"],
       },
     },
   },
 ];
 
-export async function runTool(name, args, userId) {
-  if (name === "open_app_or_url") {
-    const target = (args.target || "").toLowerCase().trim();
-    let url = target;
-    if (target.includes("youtube")) url = "https://www.youtube.com";
-    else if (target.includes("google")) url = "https://www.google.com";
-    else if (!target.startsWith("http")) url = `https://www.google.com/search?q=${encodeURIComponent(target)}`;
+function safeNumber(value, fallback = 0) {
+  const n = Number(value);
 
-    return {
-      functionResponse: { status: "success", opened: url },
-      action: { type: "open_url", url },
-    };
+  if (!Number.isFinite(n)) {
+    return fallback;
   }
 
-  if (name === "set_reminder") {
-    const dueAt = new Date(Date.now() + (args.delayMinutes || 1) * 60000);
-    return { functionResponse: { status: "success", text: args.text, dueAt } };
+  return n;
+}
+
+function calculateExpression(expression) {
+  if (typeof expression !== "string") {
+    throw new Error("Expression must be a string.");
   }
 
-  if (name === "save_note") {
-    return { functionResponse: { status: "success", text: args.text } };
+  const cleaned = expression
+    .replace(/,/g, "")
+    .replace(/%/g, "/100")
+    .trim();
+
+  /*
+    Deliberately allow only mathematical characters.
+    This prevents arbitrary JavaScript from being executed.
+  */
+  if (!/^[0-9+\-*/().\s]+$/.test(cleaned)) {
+    throw new Error("Invalid mathematical expression.");
   }
 
-  if (name === "remember_fact") {
-    return { functionResponse: { status: "success", fact: args.fact } };
+  if (cleaned.length > 200) {
+    throw new Error("Expression is too long.");
   }
 
-  if (name === "get_weather") {
-    return { functionResponse: { location: args.location, temperature: "28°C", condition: "Sunny" } };
+  const result = Function(`"use strict"; return (${cleaned})`)();
+
+  if (!Number.isFinite(result)) {
+    throw new Error("Calculation did not produce a finite number.");
   }
 
-  if (name === "calculate") {
-    try {
-      const sanitized = args.expression.replace(/[^0-9+\-*/().%\s]/g, "");
-      const result = Function(`'use strict'; return (${sanitized})`)();
-      return { functionResponse: { expression: args.expression, result } };
-    } catch {
-      return { functionResponse: { error: "Invalid math expression" } };
+  return result;
+}
+
+async function getWeather(location) {
+  const city = String(location || "").trim();
+
+  if (!city) {
+    throw new Error("Weather location is required.");
+  }
+
+  const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1`;
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Aria-AI-Assistant/1.0",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Weather service returned HTTP ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  const current = data?.current_condition?.[0];
+
+  if (!current) {
+    throw new Error("Weather information was unavailable.");
+  }
+
+  return {
+    location: city,
+    temperatureC: current.temp_C,
+    feelsLikeC: current.FeelsLikeC,
+    humidity: current.humidity,
+    windKmph: current.windspeedKmph,
+    condition: current.weatherDesc?.[0]?.value || "Unknown",
+  };
+}
+
+export async function runTool(name, args = {}) {
+  switch (name) {
+    case "set_reminder": {
+      const text = String(args.text || "").trim();
+      const delayMinutes = safeNumber(args.delayMinutes);
+
+      if (!text) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Reminder text is required.",
+          },
+        };
+      }
+
+      if (delayMinutes <= 0 || delayMinutes > 60 * 24 * 365) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Reminder delay is invalid.",
+          },
+        };
+      }
+
+      const dueAt = new Date(
+        Date.now() + delayMinutes * 60 * 1000
+      );
+
+      return {
+        functionResponse: {
+          ok: true,
+          text,
+          delayMinutes,
+          dueAt: dueAt.toISOString(),
+        },
+
+        persistence: {
+          type: "reminder",
+          text,
+          dueAt,
+        },
+      };
     }
-  }
 
-  return { functionResponse: { error: `Unknown tool ${name}` } };
+    case "save_note": {
+      const text = String(args.text || "").trim();
+
+      if (!text) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Note text is required.",
+          },
+        };
+      }
+
+      return {
+        functionResponse: {
+          ok: true,
+          text,
+        },
+
+        persistence: {
+          type: "note",
+          text,
+        },
+      };
+    }
+
+    case "remember_fact": {
+      const fact = String(args.fact || "").trim();
+
+      if (!fact) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Memory fact is required.",
+          },
+        };
+      }
+
+      return {
+        functionResponse: {
+          ok: true,
+          fact,
+        },
+
+        persistence: {
+          type: "memory",
+          fact,
+        },
+      };
+    }
+
+    case "calculate": {
+      try {
+        const result = calculateExpression(args.expression);
+
+        return {
+          functionResponse: {
+            ok: true,
+            expression: args.expression,
+            result,
+          },
+        };
+      } catch (error) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: error.message,
+          },
+        };
+      }
+    }
+
+    case "get_weather": {
+      try {
+        const weather = await getWeather(args.location);
+
+        return {
+          functionResponse: {
+            ok: true,
+            weather,
+          },
+        };
+      } catch (error) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: error.message,
+          },
+        };
+      }
+    }
+
+    case "open_app_or_url": {
+      const target = String(args.target || "").trim();
+
+      if (!target) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Target is required.",
+          },
+        };
+      }
+
+      let url = target;
+
+      if (!/^https?:\/\//i.test(url)) {
+        url = `https://www.google.com/search?q=${encodeURIComponent(
+          target
+        )}`;
+      }
+
+      return {
+        functionResponse: {
+          ok: true,
+          url,
+        },
+
+        action: {
+          type: "open_url",
+          url,
+        },
+      };
+    }
+
+    case "search_web": {
+      const query = String(args.query || "").trim();
+
+      if (!query) {
+        return {
+          functionResponse: {
+            ok: false,
+            error: "Search query is required.",
+          },
+        };
+      }
+
+      const url = `https://www.google.com/search?q=${encodeURIComponent(
+        query
+      )}`;
+
+      return {
+        functionResponse: {
+          ok: true,
+          query,
+          url,
+        },
+
+        action: {
+          type: "open_url",
+          url,
+        },
+      };
+    }
+
+    default:
+      return {
+        functionResponse: {
+          ok: false,
+          error: `Unknown tool: ${name}`,
+        },
+      };
+  }
 }

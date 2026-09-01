@@ -1,684 +1,1041 @@
-import { useEffect, useRef, useState } from "react";
-import NeuronField from "./NeuronField.jsx";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-const SERVER_URL_KEY = "aria_server_url";
-function defaultApiBase() {
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
-  const h = typeof window !== "undefined" ? window.location.hostname : "";
-  if (h === "localhost" || h === "127.0.0.1") return "http://localhost:3001";
+const API_KEY = "aria_server_url";
+
+function getApiBase() {
+  const saved = localStorage.getItem(API_KEY);
+
+  if (saved) {
+    return saved.replace(/\/+$/, "");
+  }
+
+  const envUrl = import.meta.env.VITE_API_URL;
+
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, "");
+  }
+
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    return "http://localhost:3001";
+  }
+
   return "";
 }
-function getApiBase() {
-  if (typeof window === "undefined") return defaultApiBase();
-  return localStorage.getItem(SERVER_URL_KEY) || defaultApiBase();
-}
-function setApiBase(url) {
-  const clean = url.trim().replace(/\/+$/, "");
-  if (clean) localStorage.setItem(SERVER_URL_KEY, clean);
-  else localStorage.removeItem(SERVER_URL_KEY);
-}
 
-const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+function openUrl(url) {
+  const popup = window.open(url, "_blank", "noopener,noreferrer");
 
-const SITE_MAP = {
-  youtube: "https://www.youtube.com",
-  gmail: "https://mail.google.com",
-  google: "https://www.google.com",
-  maps: "https://maps.google.com",
-  "google maps": "https://maps.google.com",
-  drive: "https://drive.google.com",
-  "google drive": "https://drive.google.com",
-  calendar: "https://calendar.google.com",
-  github: "https://github.com",
-  linkedin: "https://linkedin.com",
-  leetcode: "https://leetcode.com",
-  chatgpt: "https://chat.openai.com",
-  netflix: "https://netflix.com",
-  spotify: "https://open.spotify.com",
-  amazon: "https://amazon.in",
-  whatsapp: "https://wa.me/",
-  instagram: "https://instagram.com",
-  facebook: "https://facebook.com",
-  twitter: "https://x.com",
-  x: "https://x.com",
-  telegram: "https://t.me",
-  reddit: "https://reddit.com",
-  twitch: "https://twitch.tv",
-  discord: "https://discord.com/app",
-  notion: "https://notion.so",
-  zoom: "https://zoom.us/join",
-  flipkart: "https://flipkart.com",
-  swiggy: "https://swiggy.com",
-  zomato: "https://zomato.com",
-  playstore: "https://play.google.com/store",
-  "play store": "https://play.google.com/store",
-  news: "https://news.google.com",
-  translate: "https://translate.google.com",
-  photos: "https://photos.google.com",
-};
-
-function tryOfflineCommand(raw) {
-  const text = raw.toLowerCase().trim();
-  let m = text.match(/^(?:open|launch|go to|start)\s+(.+)/);
-  if (m) {
-    let target = m[1].replace(/[.?!]+$/, "").trim();
-    if (/\bplay\b/.test(target)) return null;
-    if (SITE_MAP[target]) {
-      const r = openTab(SITE_MAP[target]);
-      return r.blocked ? blockedMsg(r.url) : `Opening ${target}.`;
-    }
-    if (/^[\w-]+\.[a-z]{2,}$/i.test(target)) {
-      const r = openTab("https://" + target);
-      return r.blocked ? blockedMsg(r.url) : `Opening ${target}.`;
-    }
-    const r = openTab("https://www.google.com/search?q=" + encodeURIComponent(target));
-    return r.blocked ? blockedMsg(r.url) : `Searched Google for "${target}".`;
+  if (!popup) {
+    return false;
   }
 
-  m = text.match(/^search (?:google|the web) for (.+)/);
-  if (m) {
-    const r = openTab("https://www.google.com/search?q=" + encodeURIComponent(m[1]));
-    return r.blocked ? blockedMsg(r.url) : `Here's what I found for "${m[1]}".`;
+  return true;
+}
+
+function runLocalCommand(text) {
+  const value = text.trim();
+  const lower = value.toLowerCase();
+
+  // Calculator
+  const calcMatch = lower.match(
+    /^(?:calculate|compute|what is)\s+([0-9+\-*/().%\s]+)$/
+  );
+
+  if (calcMatch) {
+    try {
+      const expression = calcMatch[1]
+        .replace(/%/g, "/100")
+        .trim();
+
+      if (!/^[0-9+\-*/().\s]+$/.test(expression)) {
+        return null;
+      }
+
+      const result = Function(`"use strict"; return (${expression})`)();
+
+      if (Number.isFinite(result)) {
+        return {
+          reply: `The answer is ${result}.`,
+          local: true,
+        };
+      }
+    } catch {
+      return {
+        reply: "I couldn't calculate that expression.",
+        local: true,
+      };
+    }
   }
-  m = text.match(/^search youtube for (.+)/);
-  if (m) {
-    const r = openTab("https://www.youtube.com/results?search_query=" + encodeURIComponent(m[1]));
-    return r.blocked ? blockedMsg(r.url) : `Searching YouTube for "${m[1]}".`;
+
+  // Time
+  if (
+    lower === "what time is it" ||
+    lower === "what's the time" ||
+    lower === "current time" ||
+    lower === "time"
+  ) {
+    return {
+      reply: `It's ${new Date().toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })}.`,
+      local: true,
+    };
+  }
+
+  // Date
+  if (
+    lower === "what date is it" ||
+    lower === "today's date" ||
+    lower === "what is today's date"
+  ) {
+    return {
+      reply: `Today is ${new Date().toLocaleDateString([], {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })}.`,
+      local: true,
+    };
+  }
+
+  // Open common websites
+  const openMatch = lower.match(/^(?:open|launch|go to)\s+(.+)$/);
+
+  if (openMatch) {
+    const target = openMatch[1]
+      .replace(/[.!?]+$/, "")
+      .trim();
+
+    const sites = {
+      youtube: "https://www.youtube.com",
+      google: "https://www.google.com",
+      gmail: "https://mail.google.com",
+      github: "https://github.com",
+      linkedin: "https://www.linkedin.com",
+      instagram: "https://www.instagram.com",
+      facebook: "https://www.facebook.com",
+      whatsapp: "https://web.whatsapp.com",
+      reddit: "https://www.reddit.com",
+      spotify: "https://open.spotify.com",
+      netflix: "https://www.netflix.com",
+      amazon: "https://www.amazon.in",
+      flipkart: "https://www.flipkart.com",
+      maps: "https://maps.google.com",
+      "google maps": "https://maps.google.com",
+      drive: "https://drive.google.com",
+      calendar: "https://calendar.google.com",
+      leetcode: "https://leetcode.com",
+      chatgpt: "https://chatgpt.com",
+    };
+
+    if (sites[target]) {
+      const success = openUrl(sites[target]);
+
+      return {
+        reply: success
+          ? `Opening ${target}.`
+          : `Your browser blocked the popup. Please allow popups for this site.`,
+        local: true,
+      };
+    }
+
+    if (/^[a-z0-9-]+\.[a-z]{2,}$/i.test(target)) {
+      const url = `https://${target}`;
+      const success = openUrl(url);
+
+      return {
+        reply: success
+          ? `Opening ${target}.`
+          : "Your browser blocked the popup.",
+        local: true,
+      };
+    }
+  }
+
+  // Google search
+  let match = lower.match(/^search (?:google|the web) for (.+)$/);
+
+  if (match) {
+    const query = match[1].trim();
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+
+    const success = openUrl(url);
+
+    return {
+      reply: success
+        ? `Searching Google for "${query}".`
+        : "Your browser blocked the popup.",
+      local: true,
+    };
+  }
+
+  // YouTube search
+  match = lower.match(/^search youtube for (.+)$/);
+
+  if (match) {
+    const query = match[1].trim();
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+
+    const success = openUrl(url);
+
+    return {
+      reply: success
+        ? `Searching YouTube for "${query}".`
+        : "Your browser blocked the popup.",
+      local: true,
+    };
   }
 
   return null;
 }
 
-function blockedMsg(url) {
-  return `Your browser blocked that popup. Tap to open: ${url}`;
-}
+function Message({ message }) {
+  const isUser = message.role === "user";
+  const isSystem = message.role === "system";
 
-function openTab(url) {
-  const win = window.open(url, "_blank");
-  if (!win || win.closed || typeof win.closed === "undefined") {
-    return { blocked: true, url };
-  }
-  return { blocked: false, url };
-}
+  return (
+    <div
+      className={`message-row ${
+        isUser ? "user-row" : isSystem ? "system-row" : "assistant-row"
+      }`}
+    >
+      <div
+        className={`message ${
+          isUser ? "user-message" : isSystem ? "system-message" : "assistant-message"
+        }`}
+      >
+        {!isUser && !isSystem && <div className="message-label">ARIA</div>}
+        {isSystem && <div className="message-label">SYSTEM</div>}
 
-function linkify(text) {
-  const parts = text.split(/(https?:\/\/[^\s]+)/g);
-  return parts.map((part, i) =>
-    /^https?:\/\//.test(part) ? (
-      <a key={i} href={part} target="_blank" rel="noopener noreferrer">
-        {part}
-      </a>
-    ) : (
-      part
-    )
+        <div className="message-text">{message.content}</div>
+
+        {message.provider && (
+          <div className="message-meta">
+            {message.provider}/{message.model}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
 export default function App() {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState([
+    {
+      role: "assistant",
+      content:
+        "Hey, I'm Aria. I'm ready. Ask me anything or tell me what you'd like me to do.",
+    },
+  ]);
+
   const [input, setInput] = useState("");
-  const [state, setState] = useState("idle");
-  const [wakeOn, setWakeOn] = useState(false);
-  const [voiceOn, setVoiceOn] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [panelTab, setPanelTab] = useState("reminders");
+  const [connected, setConnected] = useState(false);
+  const [health, setHealth] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBase());
+
   const [reminders, setReminders] = useState([]);
   const [notes, setNotes] = useState([]);
-  const [memoryFacts, setMemoryFacts] = useState([]);
-  const [activeProvider, setActiveProvider] = useState(null);
-  const [configuredProviders, setConfiguredProviders] = useState([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [serverUrlInput, setServerUrlInput] = useState(getApiBase());
-  const [connected, setConnected] = useState(null);
+  const [memory, setMemory] = useState([]);
 
+  const [panel, setPanel] = useState("reminders");
+
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [listening, setListening] = useState(false);
+
+  const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
-  const continuousRef = useRef(false);
-  const awaitingCommandRef = useRef(false);
-  const chatEndRef = useRef(null);
-  const voiceOnRef = useRef(true);
-  const busyRef = useRef(false);
-  const pushToTalkActiveRef = useRef(false);
-  const restartTimerRef = useRef(null);
-  const lastModelRef = useRef(null);
+  const inputRef = useRef(null);
 
-  useEffect(() => { voiceOnRef.current = voiceOn; }, [voiceOn]);
-  useEffect(() => { busyRef.current = busy; }, [busy]);
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  const speechSupported = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+    []
+  );
 
   useEffect(() => {
-    fetch(`${getApiBase()}/api/conversation`)
-      .then((r) => r.json())
-      .then((data) => {
-        const stored = data.messages || [];
-        setMessages([
-          { role: "system", content: 'Aria is ready. Type a message, tap talk, or turn on wake-word listening.' },
-          ...stored,
-        ]);
-      })
-      .catch(() => {
-        addMsg("system", "Couldn't reach the server — check your backend deployment URL.");
-      });
-
-    fetch(`${getApiBase()}/health`)
-      .then((r) => r.json())
-      .then((data) => {
-        setConnected(true);
-        setConfiguredProviders(data.configuredProviders || []);
-        if (data.configuredProviders?.length === 0) {
-          addMsg("system", "No AI provider is configured yet — add API keys to your server environment variables.");
-        }
-        if (data.lastUsed) {
-          setActiveProvider(data.lastUsed);
-          lastModelRef.current = data.lastUsed;
-        }
-      })
-      .catch(() => {
-        setConnected(false);
-        addMsg("system", `Can't reach the Aria server at ${getApiBase() || "(same origin)"}.`);
-      });
-
-    if (!window.isSecureContext) {
-      addMsg("system", "This page isn't on a secure context (HTTPS required for microphone permissions in production).");
-    } else if (!SR) {
-      addMsg("system", "This browser doesn't support voice input — use Chrome or Edge for full microphone functionality.");
-    }
-  }, []);
-
-  useEffect(() => {
-    async function refreshPanel() {
-      try {
-        const [r, n, m] = await Promise.all([
-          fetch(`${getApiBase()}/api/reminders`).then((res) => res.json()),
-          fetch(`${getApiBase()}/api/notes`).then((res) => res.json()),
-          fetch(`${getApiBase()}/api/memory`).then((res) => res.json()),
-        ]);
-        setReminders(r.reminders || []);
-        setNotes(n.notes || []);
-        setMemoryFacts(m.facts || []);
-      } catch {}
-    }
-    async function checkDue() {
-      try {
-        const res = await fetch(`${getApiBase()}/api/reminders/due`);
-        const data = await res.json();
-        (data.due || []).forEach((r) => {
-          const text = `Reminder: ${r.text}`;
-          addMsg("assistant", text);
-          if (voiceOnRef.current && !busyRef.current) speak(text);
-        });
-        if ((data.due || []).length) refreshPanel();
-      } catch {}
-    }
-    refreshPanel();
-    const dueInterval = setInterval(checkDue, 20000);
-    const panelInterval = setInterval(refreshPanel, 15000);
-    return () => {
-      clearInterval(dueInterval);
-      clearInterval(panelInterval);
-    };
-  }, []);
-
-  function addMsg(role, content) {
-    setMessages((prev) => [...prev, { role, content }]);
-  }
-
-  function speak(text, force) {
-    if ((!voiceOnRef.current && !force) || !window.speechSynthesis) {
-      if (!force) setState("idle");
-      return;
-    }
-
-    const doSpeak = () => {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      const preferred =
-        voices.find((v) => /Google UK English Female|Samantha|Google US English/i.test(v.name)) ||
-        voices.find((v) => v.lang === "en-US");
-      if (preferred) u.voice = preferred;
-      u.rate = 1.02;
-      u.onstart = () => setState("speaking");
-      u.onend = () => setState("idle");
-      u.onerror = (e) => {
-        addMsg("system", `Voice output failed: ${e.error}.`);
-        setState("idle");
-      };
-      window.speechSynthesis.speak(u);
-    };
-
-    if (window.speechSynthesis.getVoices().length === 0) {
-      const onVoices = () => {
-        window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
-        doSpeak();
-      };
-      window.speechSynthesis.addEventListener("voiceschanged", onVoices);
-      setTimeout(() => {
-        window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
-        doSpeak();
-      }, 400);
-    } else {
-      doSpeak();
-    }
-  }
-
-  async function callAria(message) {
-    const res = await fetch(`${getApiBase()}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
     });
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.error || `Server responded ${res.status}`);
+  }, [messages, busy]);
+
+  useEffect(() => {
+    checkHealth();
+    loadData();
+
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  async function checkHealth() {
+    try {
+      const response = await fetch(`${getApiBase()}/health`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Health check failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      setHealth(data);
+      setConnected(Boolean(data.ok));
+    } catch (error) {
+      console.error("Health check error:", error);
+      setConnected(false);
     }
-    return res.json();
   }
 
-  async function handleIncoming(text, fromVoice) {
-    if (!text || !text.trim() || busyRef.current) return;
-    addMsg("user", text);
+  async function loadData() {
+    const base = getApiBase();
 
-    const offlineReply = tryOfflineCommand(text);
-    if (offlineReply) {
-      addMsg("assistant", offlineReply);
-      if (fromVoice) speak(offlineReply);
-      else setState("idle");
+    try {
+      const results = await Promise.allSettled([
+        fetch(`${base}/api/conversation`).then((r) => r.json()),
+        fetch(`${base}/api/reminders`).then((r) => r.json()),
+        fetch(`${base}/api/notes`).then((r) => r.json()),
+        fetch(`${base}/api/memory`).then((r) => r.json()),
+      ]);
+
+      const conversation = results[0];
+
+      if (conversation.status === "fulfilled") {
+        const stored = conversation.value?.messages || [];
+
+        if (stored.length > 0) {
+          setMessages([
+            {
+              role: "assistant",
+              content: "Welcome back. What would you like to do?",
+            },
+            ...stored,
+          ]);
+        }
+      }
+
+      if (results[1].status === "fulfilled") {
+        setReminders(results[1].value?.reminders || []);
+      }
+
+      if (results[2].status === "fulfilled") {
+        setNotes(results[2].value?.notes || []);
+      }
+
+      if (results[3].status === "fulfilled") {
+        setMemory(results[3].value?.facts || []);
+      }
+    } catch (error) {
+      console.error("Data loading error:", error);
+    }
+  }
+
+  async function sendToBackend(text) {
+    const response = await fetch(`${getApiBase()}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+      }),
+    });
+
+    let data = {};
+
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(
+        `Server returned ${response.status} without valid JSON.`
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || `Server returned HTTP ${response.status}.`
+      );
+    }
+
+    return data;
+  }
+
+  function speak(text) {
+    if (!voiceEnabled || !window.speechSynthesis) return;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function handleSend(event) {
+    event?.preventDefault();
+
+    const text = input.trim();
+
+    if (!text || busy) return;
+
+    setInput("");
+
+    setMessages((previous) => [
+      ...previous,
+      {
+        role: "user",
+        content: text,
+      },
+    ]);
+
+    // Important:
+    // Local commands are handled WITHOUT sending anything to an LLM.
+    const localResult = runLocalCommand(text);
+
+    if (localResult) {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: localResult.reply,
+        },
+      ]);
+
+      speak(localResult.reply);
       return;
     }
 
     setBusy(true);
-    setState("thinking");
+
     try {
-      const { reply, actions, provider, model } = await callAria(text);
+      const data = await sendToBackend(text);
 
-      const combined = provider && model ? `${provider}/${model}` : null;
-      if (combined && lastModelRef.current && combined !== lastModelRef.current) {
-        addMsg("system", `🔄 Switched AI provider to ${combined}`);
-      }
-      if (combined) {
-        lastModelRef.current = combined;
-        setActiveProvider(combined);
+      if (data.action) {
+        handleAction(data.action);
       }
 
-      (actions || []).forEach((a) => {
-        if (a.type === "open_url") {
-          const r = openTab(a.url);
-          if (r.blocked) addMsg("system", blockedMsg(a.url));
-        }
+      if (Array.isArray(data.actions)) {
+        data.actions.forEach(handleAction);
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: data.reply || "I received the request but got no response.",
+          provider: data.provider,
+          model: data.model,
+        },
+      ]);
+
+      if (data.reply) {
+        speak(data.reply);
+      }
+
+      if (data.switched) {
+        setMessages((previous) => [
+          ...previous,
+          {
+            role: "system",
+            content: `I automatically switched to ${data.provider}/${data.model}.`,
+          },
+        ]);
+      }
+
+      await loadData();
+    } catch (error) {
+      console.error("Chat error:", error);
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "system",
+          content: `Request failed: ${error.message}`,
+        },
+      ]);
+    } finally {
+      setBusy(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  function handleAction(action) {
+    if (!action) return;
+
+    if (action.type === "open_url" && action.url) {
+      const success = openUrl(action.url);
+
+      if (!success) {
+        setMessages((previous) => [
+          ...previous,
+          {
+            role: "system",
+            content:
+              "Your browser blocked the popup. Please allow popups for Aria.",
+          },
+        ]);
+      }
+    }
+  }
+
+  function startVoice() {
+    if (!speechSupported || busy || listening) return;
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    const recognition = new SpeechRecognition();
+
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      setListening(true);
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+
+      if (transcript) {
+        setInput(transcript);
+
+        setTimeout(() => {
+          handleSend();
+        }, 50);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error("Speech recognition:", event.error);
+      setListening(false);
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (error) {
+      console.error(error);
+      setListening(false);
+    }
+  }
+
+  async function clearConversation() {
+    try {
+      await fetch(`${getApiBase()}/api/conversation/clear`, {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    setMessages([
+      {
+        role: "assistant",
+        content: "Conversation cleared. What shall we do next?",
+      },
+    ]);
+  }
+
+  async function deleteNote(id) {
+    try {
+      const response = await fetch(`${getApiBase()}/api/notes/${id}`, {
+        method: "DELETE",
       });
 
-      addMsg("assistant", reply);
-      if (fromVoice) speak(reply);
-      else setState("idle");
+      const data = await response.json();
+      setNotes(data.notes || []);
+    } catch (error) {
+      console.error(error);
+    }
+  }
 
-      Promise.all([
-        fetch(`${getApiBase()}/api/reminders`).then((r) => r.json()).catch(() => null),
-        fetch(`${getApiBase()}/api/notes`).then((r) => r.json()).catch(() => null),
-      ]).then(([r, n]) => {
-        if (r) setReminders(r.reminders || []);
-        if (n) setNotes(n.notes || []);
+  async function deleteReminder(id) {
+    try {
+      const response = await fetch(`${getApiBase()}/api/reminders/${id}`, {
+        method: "DELETE",
       });
-    } catch (err) {
-      addMsg("system", "Error: " + err.message);
-      const msg = "Sorry — I hit a snag reaching my brain. Mind trying that again?";
-      addMsg("assistant", msg);
-      if (fromVoice) speak(msg);
-      else setState("idle");
-    }
-    setBusy(false);
-  }
 
-  function makeRecognizer(continuous) {
-    if (!SR) return null;
-    const r = new SR();
-    r.continuous = continuous;
-    r.interimResults = false;
-    r.lang = "en-US";
-    return r;
-  }
-
-  function explainSpeechError(errorCode) {
-    switch (errorCode) {
-      case "not-allowed":
-      case "permission-denied":
-        return 'Mic access is blocked. Check your browser site permissions.';
-      case "audio-capture":
-        return "No microphone was found.";
-      case "no-speech":
-        return null;
-      case "network":
-        return "Speech recognition network error.";
-      case "aborted":
-        return null;
-      default:
-        return `Mic error: ${errorCode || "unknown"}.`;
+      const data = await response.json();
+      setReminders(data.reminders || []);
+    } catch (error) {
+      console.error(error);
     }
   }
 
-  function startPushToTalk() {
-    if (!SR) return;
-    if (busyRef.current || state === "listening" || pushToTalkActiveRef.current) return;
-
-    const wasContinuous = continuousRef.current;
-    if (wasContinuous && recognitionRef.current) {
-      continuousRef.current = false;
-      recognitionRef.current.onend = null;
-      try { recognitionRef.current.stop(); } catch {}
-    }
-
-    pushToTalkActiveRef.current = true;
-    const r = makeRecognizer(false);
-
-    const resumeWakeWordIfNeeded = () => {
-      pushToTalkActiveRef.current = false;
-      if (wasContinuous && wakeOn) {
-        restartTimerRef.current = setTimeout(() => startContinuousListening(), 250);
-      }
-    };
-
-    r.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      handleIncoming(transcript, true);
-    };
-    r.onerror = (e) => {
-      const msg = explainSpeechError(e.error);
-      if (msg) addMsg("system", msg);
-      setState("idle");
-    };
-    r.onend = () => {
-      setState((s) => (s === "listening" ? "idle" : s));
-      resumeWakeWordIfNeeded();
-    };
-
-    setState("listening");
+  async function deleteMemory(id) {
     try {
-      r.start();
-    } catch (err) {
-      setState("idle");
-      resumeWakeWordIfNeeded();
+      const response = await fetch(`${getApiBase()}/api/memory/${id}`, {
+        method: "DELETE",
+      });
+
+      const data = await response.json();
+      setMemory(data.facts || []);
+    } catch (error) {
+      console.error(error);
     }
   }
 
-  function testVoiceOutput() {
-    addMsg("system", "Testing voice output…");
-    speak("This is a voice test. If you can hear this, text to speech is working.", true);
-  }
+  function saveSettings() {
+    const clean = serverUrl.trim().replace(/\/+$/, "");
 
-  function startContinuousListening() {
-    if (!SR) return;
-    const r = makeRecognizer(true);
-    recognitionRef.current = r;
-    continuousRef.current = true;
-    setState((s) => (s === "listening" || s === "speaking" || s === "thinking" ? s : "idle"));
-
-    const scheduleRestart = (delay) => {
-      clearTimeout(restartTimerRef.current);
-      restartTimerRef.current = setTimeout(() => {
-        if (continuousRef.current && !pushToTalkActiveRef.current) {
-          try { r.start(); } catch {}
-        }
-      }, delay);
-    };
-
-    r.onresult = (e) => {
-      const last = e.results[e.results.length - 1];
-      if (!last.isFinal) return;
-      const transcript = last[0].transcript.trim();
-      const lower = transcript.toLowerCase();
-
-      if (awaitingCommandRef.current) {
-        awaitingCommandRef.current = false;
-        handleIncoming(transcript, true);
-        return;
-      }
-      if (lower.includes("aria")) {
-        const idx = lower.indexOf("aria");
-        const after = transcript.slice(idx + 4).replace(/^[,.\s]+/, "");
-        if (after.length > 2) {
-          handleIncoming(after, true);
-        } else {
-          awaitingCommandRef.current = true;
-          setState("listening");
-          speak("Yeah?");
-        }
-      }
-    };
-    r.onend = () => {
-      if (continuousRef.current && !pushToTalkActiveRef.current) scheduleRestart(300);
-    };
-    r.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "audio-capture") {
-        setWakeOn(false);
-        continuousRef.current = false;
-        return;
-      }
-      if (continuousRef.current && !pushToTalkActiveRef.current) scheduleRestart(500);
-    };
-    try {
-      r.start();
-    } catch (err) {
-      setWakeOn(false);
-      continuousRef.current = false;
-    }
-  }
-
-  function toggleWakeWord() {
-    if (!wakeOn) {
-      if (!SR) return;
-      addMsg("system", 'Wake-word listening on — say "Aria" any time.');
-      setWakeOn(true);
-      startContinuousListening();
+    if (clean) {
+      localStorage.setItem(API_KEY, clean);
     } else {
-      addMsg("system", "Wake-word listening off.");
-      setWakeOn(false);
-      continuousRef.current = false;
-      clearTimeout(restartTimerRef.current);
-      if (recognitionRef.current) {
-        recognitionRef.current.onend = null;
-        recognitionRef.current.stop();
-      }
-      setState("idle");
+      localStorage.removeItem(API_KEY);
     }
-  }
 
-  function onSend() {
-    const val = input;
-    setInput("");
-    handleIncoming(val, false);
-  }
-
-  async function onClearConversation() {
-    await fetch(`${getApiBase()}/api/conversation/clear`, { method: "POST" }).catch(() => {});
-    setMessages([{ role: "system", content: "Conversation cleared." }]);
-  }
-
-  async function onDeleteMemoryFact(id) {
-    setMemoryFacts((prev) => prev.filter((f) => f.id !== id));
-    try {
-      const res = await fetch(`${getApiBase()}/api/memory/${id}`, { method: "DELETE" });
-      const data = await res.json();
-      setMemoryFacts(data.facts || []);
-    } catch {}
-  }
-
-  function onSaveSettings() {
-    setApiBase(serverUrlInput);
     setSettingsOpen(false);
-    setConnected(null);
-    fetch(`${getApiBase()}/health`)
-      .then((r) => r.json())
-      .then((data) => {
-        setConnected(true);
-        setConfiguredProviders(data.configuredProviders || []);
-      })
-      .catch(() => setConnected(false));
-  }
 
-  const orbLabel =
-    state === "listening"
-      ? "Listening…"
-      : state === "thinking"
-      ? "Thinking…"
-      : state === "speaking"
-      ? "Speaking…"
-      : wakeOn
-      ? 'Say "Aria" to wake me'
-      : "Tap talk or type below";
+    setTimeout(() => {
+      checkHealth();
+      loadData();
+    }, 100);
+  }
 
   return (
-    <div className="app mobile-responsive-layout">
-      <NeuronField state={state} />
+    <div className="aria-app">
+      <header className="topbar">
+        <div className="brand-area">
+          <button
+            className="mobile-menu-button"
+            onClick={() => setSidebarOpen((value) => !value)}
+          >
+            ☰
+          </button>
 
-      <header className="mobile-header">
-        <div className="brand">
-          <h1>ARIA</h1>
-          <span>your voice companion</span>
-        </div>
-        <div className="header-right">
-          {activeProvider && (
-            <div className="provider-pill hidden sm:block" title={`${configuredProviders.length} provider(s) configured`}>
-              ⚡ {activeProvider}
-            </div>
-          )}
-          <button className="panel-toggle" onClick={() => setPanelOpen((v) => !v)}>
-            🗒️ {reminders.length + notes.length + memoryFacts.length > 0 ? `(${reminders.length + notes.length + memoryFacts.length})` : ""}
-          </button>
-          <button className="panel-toggle icon-btn" onClick={() => { setServerUrlInput(getApiBase()); setSettingsOpen(true); }} title="Settings">
-            ⚙️
-          </button>
-          <div className="status-pill">
-            <span className={`status-dot ${connected === false ? "offline" : state !== "idle" ? state : ""}`}></span>
-            <span className="hidden sm:inline">{connected === false ? "offline" : state}</span>
+          <div className="brand-mark">
+            A
           </div>
+
+          <div>
+            <div className="brand-title">ARIA</div>
+            <div className="brand-subtitle">AI VOICE COMPANION</div>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          <div className={`connection ${connected ? "online" : "offline"}`}>
+            <span className="connection-dot" />
+            {connected ? "Connected" : "Offline"}
+          </div>
+
+          <button
+            className="icon-button"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
-      <main className="mobile-main-grid">
-        <section className="orb-panel">
-          <div className="orb-wrap">
-            <div className={`orb-ring ${state === "listening" || state === "speaking" ? "active" : ""} ${state === "speaking" ? "speaking" : ""}`}></div>
-            <div className={`orb-ring ${state === "listening" || state === "speaking" ? "active" : ""} ${state === "speaking" ? "speaking" : ""}`}></div>
-            <div className={`orb ${state === "listening" ? "listening" : ""} ${state === "speaking" ? "speaking" : ""}`}>
-              <div className="orb-core"></div>
-            </div>
-          </div>
-          <div className="orb-label">{orbLabel}</div>
+      <div className="app-body">
+        <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+          <button
+            className="new-chat"
+            onClick={clearConversation}
+          >
+            <span>＋</span>
+            New conversation
+          </button>
 
-          <div className="controls">
-            <button className="primary" onClick={startPushToTalk}>🎙️ Tap to Talk</button>
-            <div className="toggle-row">
-              <span>Wake-word listening</span>
-              <div className={`switch ${wakeOn ? "on" : ""}`} onClick={toggleWakeWord}></div>
-            </div>
-            <div className="toggle-row">
-              <span>Voice replies</span>
-              <div className={`switch ${voiceOn ? "on" : ""}`} onClick={() => setVoiceOn((v) => !v)}></div>
-            </div>
-            <button onClick={testVoiceOutput}>🔊 Test voice output</button>
-            <button onClick={onClearConversation}>🗑️ Clear conversation</button>
+          <div className="sidebar-section">
+            <div className="sidebar-heading">Workspace</div>
+
+            <button
+              className={`sidebar-item ${
+                panel === "reminders" ? "active" : ""
+              }`}
+              onClick={() => setPanel("reminders")}
+            >
+              <span>⏰</span>
+              Reminders
+              <span className="count">{reminders.length}</span>
+            </button>
+
+            <button
+              className={`sidebar-item ${
+                panel === "notes" ? "active" : ""
+              }`}
+              onClick={() => setPanel("notes")}
+            >
+              <span>📝</span>
+              Notes
+              <span className="count">{notes.length}</span>
+            </button>
+
+            <button
+              className={`sidebar-item ${
+                panel === "memory" ? "active" : ""
+              }`}
+              onClick={() => setPanel("memory")}
+            >
+              <span>🧠</span>
+              Memory
+              <span className="count">{memory.length}</span>
+            </button>
           </div>
 
-          <div className="hint hidden md:block">
-            Try: <b>"Aria, what's the weather in Chennai"</b>, <b>"remind me to drink water in 20 minutes"</b>,
-            <b> "open YouTube and play believer"</b>
-          </div>
-        </section>
-
-        <section className="chat-panel">
-          <div className="chat-log">
-            {messages.map((m, i) => (
-              <div key={i} className={`msg ${m.role}`}>
-                {m.role !== "system" && <span className="tag">{m.role === "user" ? "YOU" : "ARIA"}</span>}
-                <div>{linkify(m.content)}</div>
+          <div className="sidebar-bottom">
+            <div className="model-status">
+              <div className="model-status-title">
+                AI routing
               </div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-          <div className="composer">
-            <input
-              type="text"
-              placeholder="Type instead of talking…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && onSend()}
-            />
-            <button className={`mic ${state === "listening" ? "active" : ""}`} onClick={startPushToTalk} title="Tap to talk">🎤</button>
-            <button onClick={onSend} title="Send">➤</button>
-          </div>
-        </section>
 
-        {panelOpen && (
-          <aside className="side-panel mobile-drawer">
-            <div className="side-panel-header">
-              <span>Your Aria</span>
-              <button className="close-btn" onClick={() => setPanelOpen(false)}>✕</button>
-            </div>
-            <div className="panel-tabs">
-              <button className={panelTab === "reminders" ? "active" : ""} onClick={() => setPanelTab("reminders")}>
-                Reminders {reminders.length > 0 && `(${reminders.length})`}
-              </button>
-              <button className={panelTab === "notes" ? "active" : ""} onClick={() => setPanelTab("notes")}>
-                Notes {notes.length > 0 && `(${notes.length})`}
-              </button>
-              <button className={panelTab === "memory" ? "active" : ""} onClick={() => setPanelTab("memory")}>
-                Memory {memoryFacts.length > 0 && `(${memoryFacts.length})`}
-              </button>
+              <div className="model-status-value">
+                {health?.lastUsed || "Waiting for request"}
+              </div>
+
+              <div className="model-status-small">
+                {health?.configuredProviders?.length || 0} provider(s)
+                configured
+              </div>
             </div>
 
-            {panelTab === "reminders" && (
-              <div className="side-panel-section">
-                {reminders.length === 0 && <p className="empty">Nothing pending</p>}
-                {reminders.map((r) => (
-                  <div key={r.id || r._id} className="side-item">
-                    <span>{r.text}</span>
-                    <span className="side-item-meta">{new Date(r.dueAt).toLocaleString()}</span>
-                  </div>
+            <button
+              className="sidebar-clear"
+              onClick={clearConversation}
+            >
+              Clear conversation
+            </button>
+          </div>
+        </aside>
+
+        <main className="main-area">
+          <section className="chat-section">
+            <div className="chat-header">
+              <div>
+                <h2>Conversation</h2>
+                <p>
+                  {busy
+                    ? "Aria is thinking..."
+                    : listening
+                    ? "Listening..."
+                    : "Ready when you are"}
+                </p>
+              </div>
+
+              <div className="chat-state">
+                <span
+                  className={`state-dot ${
+                    busy || listening ? "active" : ""
+                  }`}
+                />
+                {busy
+                  ? "Thinking"
+                  : listening
+                  ? "Listening"
+                  : "Ready"}
+              </div>
+            </div>
+
+            <div className="messages-container">
+              <div className="messages">
+                {messages.map((message, index) => (
+                  <Message
+                    key={`${index}-${message.role}`}
+                    message={message}
+                  />
                 ))}
-              </div>
-            )}
 
-            {panelTab === "notes" && (
-              <div className="side-panel-section">
-                {notes.length === 0 && <p className="empty">Nothing saved</p>}
-                {notes.map((n) => (
-                  <div key={n.id || n._id} className="side-item">
-                    <span>{n.text}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+                {busy && (
+                  <div className="message-row assistant-row">
+                    <div className="message assistant-message thinking-message">
+                      <div className="message-label">ARIA</div>
 
-            {panelTab === "memory" && (
-              <div className="side-panel-section">
-                {memoryFacts.length === 0 && <p className="empty">Nothing yet</p>}
-                {memoryFacts.map((f) => (
-                  <div key={f.id || f._id} className="side-item memory-item">
-                    <span>{f.fact}</span>
-                    <button className="forget-btn" onClick={() => onDeleteMemoryFact(f.id || f._id)} title="Forget this">✕</button>
+                      <div className="thinking-dots">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    </div>
                   </div>
-                ))}
+                )}
+
+                <div ref={messagesEndRef} />
               </div>
-            )}
+            </div>
+
+            <div className="composer-area">
+              <form className="composer" onSubmit={handleSend}>
+                <button
+                  type="button"
+                  className={`voice-button ${
+                    listening ? "listening" : ""
+                  }`}
+                  onClick={startVoice}
+                  disabled={!speechSupported || busy}
+                  title={
+                    speechSupported
+                      ? "Voice input"
+                      : "Voice input is not supported"
+                  }
+                >
+                  {listening ? "●" : "🎙"}
+                </button>
+
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder={
+                    busy
+                      ? "Aria is thinking..."
+                      : "Message Aria..."
+                  }
+                  disabled={busy}
+                  autoComplete="off"
+                />
+
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={!input.trim() || busy}
+                >
+                  ➤
+                </button>
+              </form>
+
+              <div className="composer-footer">
+                <span>
+                  {speechSupported
+                    ? "Voice input available"
+                    : "Text input"}
+                </span>
+
+                <button
+                  className={`voice-toggle ${
+                    voiceEnabled ? "enabled" : ""
+                  }`}
+                  onClick={() =>
+                    setVoiceEnabled((value) => !value)
+                  }
+                >
+                  {voiceEnabled ? "🔊 Voice on" : "🔇 Voice off"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <aside className="right-panel">
+            <div className="right-panel-header">
+              <div>
+                <h3>
+                  {panel === "reminders"
+                    ? "Reminders"
+                    : panel === "notes"
+                    ? "Notes"
+                    : "Memory"}
+                </h3>
+
+                <span>
+                  {panel === "reminders"
+                    ? `${reminders.length} active`
+                    : panel === "notes"
+                    ? `${notes.length} saved`
+                    : `${memory.length} facts`}
+                </span>
+              </div>
+            </div>
+
+            <div className="right-panel-content">
+              {panel === "reminders" && (
+                <>
+                  {reminders.length === 0 ? (
+                    <div className="empty-state">
+                      <div>⏰</div>
+                      <strong>No reminders</strong>
+                      <span>
+                        Tell Aria something like
+                        <br />
+                        "remind me in 20 minutes"
+                      </span>
+                    </div>
+                  ) : (
+                    reminders.map((reminder) => (
+                      <div
+                        className="data-card"
+                        key={reminder._id || reminder.id}
+                      >
+                        <div className="data-icon">⏰</div>
+
+                        <div className="data-main">
+                          <strong>{reminder.text}</strong>
+                          <span>
+                            {new Date(
+                              reminder.dueAt
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            deleteReminder(
+                              reminder._id || reminder.id
+                            )
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+
+              {panel === "notes" && (
+                <>
+                  {notes.length === 0 ? (
+                    <div className="empty-state">
+                      <div>📝</div>
+                      <strong>No notes</strong>
+                      <span>
+                        Tell Aria "take a note that..."
+                      </span>
+                    </div>
+                  ) : (
+                    notes.map((note) => (
+                      <div
+                        className="data-card"
+                        key={note._id || note.id}
+                      >
+                        <div className="data-icon">📝</div>
+
+                        <div className="data-main">
+                          <strong>{note.text}</strong>
+                          <span>
+                            {new Date(
+                              note.createdAt
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            deleteNote(note._id || note.id)
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+
+              {panel === "memory" && (
+                <>
+                  {memory.length === 0 ? (
+                    <div className="empty-state">
+                      <div>🧠</div>
+                      <strong>No memories</strong>
+                      <span>
+                        Tell Aria "remember that..."
+                      </span>
+                    </div>
+                  ) : (
+                    memory.map((fact) => (
+                      <div
+                        className="data-card"
+                        key={fact._id || fact.id}
+                      >
+                        <div className="data-icon">🧠</div>
+
+                        <div className="data-main">
+                          <strong>{fact.fact}</strong>
+                          <span>
+                            {new Date(
+                              fact.createdAt
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            deleteMemory(
+                              fact._id || fact.id
+                            )
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+            </div>
           </aside>
-        )}
-      </main>
+        </main>
+      </div>
 
       {settingsOpen && (
-        <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Settings</h3>
-            <label className="modal-label">Aria server URL</label>
+        <div
+          className="modal-overlay"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className="settings-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <h3>Connection settings</h3>
+                <p>Configure your Aria backend URL.</p>
+              </div>
+
+              <button onClick={() => setSettingsOpen(false)}>
+                ×
+              </button>
+            </div>
+
+            <label>Backend URL</label>
+
             <input
-              type="text"
-              className="modal-input"
-              value={serverUrlInput}
-              onChange={(e) => setServerUrlInput(e.target.value)}
-              placeholder="https://your-backend.onrender.com"
+              value={serverUrl}
+              onChange={(event) =>
+                setServerUrl(event.target.value)
+              }
+              placeholder="https://your-server.onrender.com"
             />
+
+            <div className="modal-help">
+              Your Vercel deployment should normally use the
+              VITE_API_URL environment variable.
+            </div>
+
             <div className="modal-actions">
-              <button onClick={() => setSettingsOpen(false)}>Cancel</button>
-              <button className="primary" onClick={onSaveSettings}>Save & Reconnect</button>
+              <button
+                className="secondary-button"
+                onClick={() => setSettingsOpen(false)}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="primary-button"
+                onClick={saveSettings}
+              >
+                Save & reconnect
+              </button>
             </div>
           </div>
         </div>
