@@ -1,0 +1,64 @@
+[
+  {
+    "_id": "1788272803157",
+    "title": "how was your day going...",
+    "messages": [
+      {
+        "role": "user",
+        "content": "how was your day going"
+      },
+      {
+        "role": "user",
+        "content": "how was your day going"
+      },
+      {
+        "role": "assistant",
+        "content": "Hey! My day’s been a nice blend of helping folks out and learning a few new things along the way—pretty rewarding. How’s your day shaping up? Anything exciting or anything I can help with today?"
+      },
+      {
+        "role": "user",
+        "content": "can we just talk as a difference"
+      },
+      {
+        "role": "user",
+        "content": "can we just talk as a difference"
+      },
+      {
+        "role": "assistant",
+        "content": "Absolutely—I’m happy to switch things up! 😊 What’s on your mind? Are you looking to compare a couple of ideas, tech topics, study strategies, or just want a fresh, different kind of chat? Let me know, and we’ll dive right in!"
+      },
+      {
+        "role": "user",
+        "content": "I asked just can we talk as a friends"
+      },
+      {
+        "role": "user",
+        "content": "I asked just can we talk as a friends"
+      },
+      {
+        "role": "assistant",
+        "content": "Sure thing, friend! 😊 What’s been going on with you lately? Anything fun, stressful, or just random thoughts you want to share? I’m all ears."
+      }
+    ],
+    "updatedAt": 1788272846539
+  },
+  {
+    "_id": "1788272768030",
+    "title": "hey hi...",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hey hi"
+      },
+      {
+        "role": "user",
+        "content": "hey hi"
+      },
+      {
+        "role": "assistant",
+        "content": "Hey there! 👋 How’s it going? Anything fun or stressful on your plate today? I'm here for a chat, a quick study question, or anything else you need. 😊"
+      }
+    ],
+    "updatedAt": 1788272769532
+  }
+]
