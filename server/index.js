@@ -3,84 +3,125 @@ import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 
-import { TOOLS, runTool } from "./tools.js";
+import {
+  TOOLS,
+  runTool,
+} from "./tools.js";
 
 dotenv.config();
 
 const app = express();
 
-const PORT = process.env.PORT || 3001;
+const PORT =
+  process.env.PORT || 3001;
 
 const CLIENT_URL = (
   process.env.CLIENT_URL ||
-  process.env.VERCEL_URL ||
   "*"
 ).replace(/\/+$/, "");
 
 const HISTORY_WINDOW = 30;
+
 const MAX_TOOL_ITERATIONS = 5;
 
 /*
-  --------------------------------------------------------------------------
-  CORS
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| CORS
+|--------------------------------------------------------------------------
 */
 
 const allowedOrigins =
   CLIENT_URL === "*"
     ? true
-    : CLIENT_URL.split(",")
-        .map((value) => value.trim())
+    : CLIENT_URL
+        .split(",")
+        .map((value) =>
+          value.trim()
+        )
         .filter(Boolean);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin:
+      allowedOrigins,
+
     credentials: false,
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
+app.use(
+  express.json({
+    limit: "1mb",
+  })
+);
 
 /*
-  --------------------------------------------------------------------------
-  DATABASE
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| DATABASE
+|--------------------------------------------------------------------------
 */
 
 let mongoReady = false;
 
 const mongoUri =
-  process.env.MONGO_URI || process.env.MONGODB_URI;
+  process.env.MONGO_URI ||
+  process.env.MONGODB_URI;
 
 if (mongoUri) {
   mongoose
     .connect(mongoUri, {
-      serverSelectionTimeoutMS: 10000,
+      serverSelectionTimeoutMS:
+        10000,
     })
     .then(() => {
       mongoReady = true;
-      console.log("MongoDB connected successfully.");
+
+      console.log(
+        "MongoDB connected successfully."
+      );
     })
     .catch((error) => {
       mongoReady = false;
-      console.error("MongoDB connection failed:", error.message);
+
+      console.error(
+        "MongoDB connection failed:",
+        error.message
+      );
     });
 
-  mongoose.connection.on("connected", () => {
-    mongoReady = true;
-    console.log("MongoDB connection established.");
-  });
+  mongoose.connection.on(
+    "connected",
+    () => {
+      mongoReady = true;
 
-  mongoose.connection.on("disconnected", () => {
-    mongoReady = false;
-    console.warn("MongoDB disconnected.");
-  });
+      console.log(
+        "MongoDB connection established."
+      );
+    }
+  );
 
-  mongoose.connection.on("error", (error) => {
-    mongoReady = false;
-    console.error("MongoDB error:", error.message);
-  });
+  mongoose.connection.on(
+    "disconnected",
+    () => {
+      mongoReady = false;
+
+      console.warn(
+        "MongoDB disconnected."
+      );
+    }
+  );
+
+  mongoose.connection.on(
+    "error",
+    (error) => {
+      mongoReady = false;
+
+      console.error(
+        "MongoDB error:",
+        error.message
+      );
+    }
+  );
 } else {
   console.warn(
     "MONGO_URI/MONGODB_URI is not configured. Database features are disabled."
@@ -88,276 +129,424 @@ if (mongoUri) {
 }
 
 /*
-  --------------------------------------------------------------------------
-  SCHEMAS
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| DATABASE SCHEMAS
+|--------------------------------------------------------------------------
 */
 
-const conversationSchema = new mongoose.Schema(
-  {
-    messages: {
-      type: [
-        {
-          role: String,
-          content: String,
-          tool_calls: Array,
-          tool_call_id: String,
-          name: String,
-          timestamp: {
-            type: Date,
-            default: Date.now,
+const conversationSchema =
+  new mongoose.Schema(
+    {
+      messages: {
+        type: [
+          {
+            role: String,
+
+            content: String,
+
+            tool_calls: Array,
+
+            tool_call_id: String,
+
+            name: String,
+
+            timestamp: {
+              type: Date,
+
+              default: Date.now,
+            },
           },
-        },
-      ],
-      default: [],
+        ],
+
+        default: [],
+      },
+
+      updatedAt: {
+        type: Date,
+
+        default: Date.now,
+      },
     },
 
-    updatedAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    collection: "aria_conversations",
-  }
-);
+    {
+      collection:
+        "aria_conversations",
+    }
+  );
 
-const memorySchema = new mongoose.Schema(
-  {
-    fact: {
-      type: String,
-      required: true,
-    },
+const memorySchema =
+  new mongoose.Schema(
+    {
+      fact: {
+        type: String,
 
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    collection: "aria_memory",
-  }
-);
+        required: true,
+      },
 
-const reminderSchema = new mongoose.Schema(
-  {
-    text: {
-      type: String,
-      required: true,
+      createdAt: {
+        type: Date,
+
+        default: Date.now,
+      },
     },
 
-    dueAt: {
-      type: Date,
-      required: true,
+    {
+      collection:
+        "aria_memory",
+    }
+  );
+
+const reminderSchema =
+  new mongoose.Schema(
+    {
+      text: {
+        type: String,
+
+        required: true,
+      },
+
+      dueAt: {
+        type: Date,
+
+        required: true,
+      },
+
+      delivered: {
+        type: Boolean,
+
+        default: false,
+      },
+
+      createdAt: {
+        type: Date,
+
+        default: Date.now,
+      },
     },
 
-    delivered: {
-      type: Boolean,
-      default: false,
+    {
+      collection:
+        "aria_reminders",
+    }
+  );
+
+const noteSchema =
+  new mongoose.Schema(
+    {
+      text: {
+        type: String,
+
+        required: true,
+      },
+
+      createdAt: {
+        type: Date,
+
+        default: Date.now,
+      },
     },
 
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    collection: "aria_reminders",
-  }
-);
-
-const noteSchema = new mongoose.Schema(
-  {
-    text: {
-      type: String,
-      required: true,
-    },
-
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    collection: "aria_notes",
-  }
-);
+    {
+      collection:
+        "aria_notes",
+    }
+  );
 
 const Conversation =
   mongoose.models.AriaConversation ||
-  mongoose.model("AriaConversation", conversationSchema);
+  mongoose.model(
+    "AriaConversation",
+    conversationSchema
+  );
 
 const Memory =
   mongoose.models.AriaMemory ||
-  mongoose.model("AriaMemory", memorySchema);
+  mongoose.model(
+    "AriaMemory",
+    memorySchema
+  );
 
 const Reminder =
   mongoose.models.AriaReminder ||
-  mongoose.model("AriaReminder", reminderSchema);
+  mongoose.model(
+    "AriaReminder",
+    reminderSchema
+  );
 
 const Note =
   mongoose.models.AriaNote ||
-  mongoose.model("AriaNote", noteSchema);
+  mongoose.model(
+    "AriaNote",
+    noteSchema
+  );
 
 /*
-  --------------------------------------------------------------------------
-  PROVIDERS
-  --------------------------------------------------------------------------
-
-  IMPORTANT:
-
-  We don't send a request to every model.
-
-  The router chooses ONE candidate.
-
-  Another candidate is tried ONLY when the current request fails with a
-  retryable error such as 429, timeout, 502, 503, etc.
-
-  Successful requests STOP the chain immediately.
+|--------------------------------------------------------------------------
+| AI PROVIDERS
+|--------------------------------------------------------------------------
+|
+| IMPORTANT:
+|
+| The router does NOT broadcast requests.
+|
+| It chooses ONE model.
+|
+| Only when that model fails does it try a fallback.
+|
+|--------------------------------------------------------------------------
 */
 
 const PROVIDERS = [
+  /*
+  GROQ
+  */
+
   {
     id: "groq",
-    envKey: "GROQ_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.groq.com/openai/v1/chat/completions",
+
+    envKey:
+      "GROQ_API_KEY",
+
+    kind:
+      "openai-compatible",
+
+    baseUrl:
+      "https://api.groq.com/openai/v1/chat/completions",
 
     models: (
       process.env.GROQ_MODELS ||
       "llama-3.3-70b-versatile,llama-3.1-8b-instant"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
   },
 
+  /*
+  GEMINI
+
+  IMPORTANT:
+  Do NOT put gemini-2.5-flash here.
+
+  Your previous error came from that model.
+  */
+
   {
     id: "gemini",
-    envKey: "GEMINI_API_KEY",
+
+    envKey:
+      "GEMINI_API_KEY",
+
     kind: "gemini",
 
     models: (
       process.env.GEMINI_MODELS ||
-      "gemini-2.5-flash,gemini-flash-latest"
+      "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
   },
 
+  /*
+  OPENROUTER
+  */
+
   {
     id: "openrouter",
-    envKey: "OPENROUTER_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://openrouter.ai/api/v1/chat/completions",
+
+    envKey:
+      "OPENROUTER_API_KEY",
+
+    kind:
+      "openai-compatible",
+
+    baseUrl:
+      "https://openrouter.ai/api/v1/chat/completions",
 
     models: (
       process.env.OPENROUTER_MODELS ||
       "openrouter/free"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
 
     extraHeaders: {
       "HTTP-Referer":
-        process.env.CLIENT_URL || "https://aria.app",
-      "X-Title": "Aria AI Companion",
+        process.env.CLIENT_URL ||
+        "https://aria.app",
+
+      "X-Title":
+        "Aria AI Companion",
     },
   },
 
+  /*
+  CEREBRAS
+  */
+
   {
     id: "cerebras",
-    envKey: "CEREBRAS_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.cerebras.ai/v1/chat/completions",
+
+    envKey:
+      "CEREBRAS_API_KEY",
+
+    kind:
+      "openai-compatible",
+
+    baseUrl:
+      "https://api.cerebras.ai/v1/chat/completions",
 
     models: (
       process.env.CEREBRAS_MODELS ||
       "llama-3.3-70b"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
   },
 
+  /*
+  OPENAI
+  */
+
   {
     id: "openai",
-    envKey: "OPENAI_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.openai.com/v1/chat/completions",
+
+    envKey:
+      "OPENAI_API_KEY",
+
+    kind:
+      "openai-compatible",
+
+    baseUrl:
+      "https://api.openai.com/v1/chat/completions",
 
     models: (
       process.env.OPENAI_MODELS ||
       "gpt-4o-mini"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
   },
 
+  /*
+  XAI
+  */
+
   {
     id: "xai",
-    envKey: "XAI_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.x.ai/v1/chat/completions",
+
+    envKey:
+      "XAI_API_KEY",
+
+    kind:
+      "openai-compatible",
+
+    baseUrl:
+      "https://api.x.ai/v1/chat/completions",
 
     models: (
       process.env.XAI_MODELS ||
       "grok-3"
     )
       .split(",")
-      .map((x) => x.trim())
+      .map((x) =>
+        x.trim()
+      )
       .filter(Boolean),
   },
 ].filter(
   (provider) =>
-    process.env[provider.envKey] &&
-    provider.models.length > 0
+    process.env[
+      provider.envKey
+    ] &&
+    provider.models.length >
+      0
 );
 
 /*
-  --------------------------------------------------------------------------
-  MODEL ROUTER
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| MODEL COOLDOWNS
+|--------------------------------------------------------------------------
 */
 
-const cooldownUntil = new Map();
+const cooldownUntil =
+  new Map();
 
-let lastSuccessfulCandidate = null;
+const RATE_LIMIT_COOLDOWN =
+  60 * 1000;
 
-const RATE_LIMIT_COOLDOWN = 60 * 1000;
-const TEMPORARY_ERROR_COOLDOWN = 15 * 1000;
-const INVALID_MODEL_COOLDOWN = 60 * 60 * 1000;
-const AUTH_ERROR_COOLDOWN = 60 * 60 * 1000;
+const TEMPORARY_ERROR_COOLDOWN =
+  15 * 1000;
 
-function candidateKey(provider, model) {
+const INVALID_MODEL_COOLDOWN =
+  60 * 60 * 1000;
+
+const AUTH_ERROR_COOLDOWN =
+  60 * 60 * 1000;
+
+let lastSuccessfulCandidate =
+  null;
+
+/*
+|--------------------------------------------------------------------------
+| CANDIDATE HELPERS
+|--------------------------------------------------------------------------
+*/
+
+function candidateKey(
+  provider,
+  model
+) {
   return `${provider.id}:${model}`;
 }
 
-function isCoolingDown(key) {
-  const until = cooldownUntil.get(key);
+function isCoolingDown(
+  key
+) {
+  const until =
+    cooldownUntil.get(key);
 
-  return Boolean(until && Date.now() < until);
+  return Boolean(
+    until &&
+      Date.now() < until
+  );
 }
 
-function setCooldown(key, milliseconds) {
-  cooldownUntil.set(key, Date.now() + milliseconds);
+function setCooldown(
+  key,
+  milliseconds
+) {
+  cooldownUntil.set(
+    key,
+    Date.now() +
+      milliseconds
+  );
 }
 
-function clearCooldown(key) {
+function clearCooldown(
+  key
+) {
   cooldownUntil.delete(key);
 }
 
 /*
-  Build a candidate list.
-
-  We prefer the last successful model.
-
-  BUT only one candidate is called initially.
-
-  The rest are fallback candidates.
+|--------------------------------------------------------------------------
+| BUILD MODEL LIST
+|--------------------------------------------------------------------------
 */
 
 function buildCandidates() {
@@ -367,52 +556,107 @@ function buildCandidates() {
     for (const model of provider.models) {
       all.push({
         provider,
+
         model,
-        key: candidateKey(provider, model),
+
+        key: candidateKey(
+          provider,
+          model
+        ),
       });
     }
   }
 
+  /*
+  Prefer the model that worked last.
+  */
+
   if (lastSuccessfulCandidate) {
-    const index = all.findIndex(
-      (candidate) =>
-        candidate.key === lastSuccessfulCandidate.key
-    );
+    const index =
+      all.findIndex(
+        (candidate) =>
+          candidate.key ===
+          lastSuccessfulCandidate.key
+      );
 
     if (index >= 0) {
-      const [preferred] = all.splice(index, 1);
-      all.unshift(preferred);
+      const [
+        preferred,
+      ] =
+        all.splice(
+          index,
+          1
+        );
+
+      all.unshift(
+        preferred
+      );
     }
   }
 
-  const healthy = all.filter(
-    (candidate) => !isCoolingDown(candidate.key)
-  );
+  /*
+  Healthy models first.
+  */
 
-  const cooling = all.filter(
-    (candidate) => isCoolingDown(candidate.key)
-  );
+  const healthy =
+    all.filter(
+      (candidate) =>
+        !isCoolingDown(
+          candidate.key
+        )
+    );
 
-  return [...healthy, ...cooling];
+  const cooling =
+    all.filter(
+      (candidate) =>
+        isCoolingDown(
+          candidate.key
+        )
+    );
+
+  return [
+    ...healthy,
+    ...cooling,
+  ];
 }
 
 /*
-  --------------------------------------------------------------------------
-  FAILURE CLASSIFICATION
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| ERROR CLASSIFICATION
+|--------------------------------------------------------------------------
 */
 
-function classifyError(error) {
-  const status = Number(error?.status || 0);
-  const message = String(error?.message || "").toLowerCase();
+function classifyError(
+  error
+) {
+  const status = Number(
+    error?.status || 0
+  );
+
+  const message =
+    String(
+      error?.message || ""
+    ).toLowerCase();
+
+  /*
+  Rate limit.
+  */
 
   if (status === 429) {
     return {
       retry: true,
-      cooldown: RATE_LIMIT_COOLDOWN,
-      reason: "rate-limit",
+
+      cooldown:
+        RATE_LIMIT_COOLDOWN,
+
+      reason:
+        "rate-limit",
     };
   }
+
+  /*
+  Temporary provider errors.
+  */
 
   if (
     status === 408 ||
@@ -422,63 +666,109 @@ function classifyError(error) {
   ) {
     return {
       retry: true,
-      cooldown: TEMPORARY_ERROR_COOLDOWN,
-      reason: "temporary-provider-error",
+
+      cooldown:
+        TEMPORARY_ERROR_COOLDOWN,
+
+      reason:
+        "temporary-provider-error",
     };
   }
 
+  /*
+  Timeout.
+  */
+
   if (
-    message.includes("timeout") ||
-    message.includes("timed out") ||
-    message.includes("fetch failed")
+    message.includes(
+      "timeout"
+    ) ||
+    message.includes(
+      "timed out"
+    ) ||
+    message.includes(
+      "fetch failed"
+    )
   ) {
     return {
       retry: true,
-      cooldown: TEMPORARY_ERROR_COOLDOWN,
-      reason: "timeout",
+
+      cooldown:
+        TEMPORARY_ERROR_COOLDOWN,
+
+      reason:
+        "timeout",
     };
   }
+
+  /*
+  Invalid/unavailable model.
+  */
 
   if (
     status === 404 ||
-    message.includes("model not found") ||
-    message.includes("model does not exist") ||
-    message.includes("unknown model")
+    message.includes(
+      "model not found"
+    ) ||
+    message.includes(
+      "model does not exist"
+    ) ||
+    message.includes(
+      "unknown model"
+    ) ||
+    message.includes(
+      "no longer available"
+    )
   ) {
     return {
       retry: true,
-      cooldown: INVALID_MODEL_COOLDOWN,
-      reason: "model-unavailable",
+
+      cooldown:
+        INVALID_MODEL_COOLDOWN,
+
+      reason:
+        "model-unavailable",
     };
   }
 
   /*
-    Invalid API keys should NOT cause us to hammer the same provider.
-    We temporarily cool it down and move on.
+  Authentication error.
   */
-  if (status === 401 || status === 403) {
+
+  if (
+    status === 401 ||
+    status === 403
+  ) {
     return {
       retry: true,
-      cooldown: AUTH_ERROR_COOLDOWN,
-      reason: "authentication",
+
+      cooldown:
+        AUTH_ERROR_COOLDOWN,
+
+      reason:
+        "authentication",
     };
   }
 
   /*
-    For unexpected provider errors, try one fallback.
-    This makes Aria more resilient without endlessly broadcasting requests.
+  Unknown provider failure.
   */
+
   return {
     retry: true,
-    cooldown: TEMPORARY_ERROR_COOLDOWN,
-    reason: "unknown-provider-error",
+
+    cooldown:
+      TEMPORARY_ERROR_COOLDOWN,
+
+    reason:
+      "unknown-provider-error",
   };
 }
 
 /*
-  --------------------------------------------------------------------------
-  OPENAI-COMPATIBLE REQUEST
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| OPENAI COMPATIBLE
+|--------------------------------------------------------------------------
 */
 
 async function callOpenAICompatible(
@@ -486,70 +776,90 @@ async function callOpenAICompatible(
   model,
   messages
 ) {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 25000);
+  const timeout =
+    setTimeout(() => {
+      controller.abort();
+    }, 25000);
 
   try {
-    const response = await fetch(provider.baseUrl, {
-      method: "POST",
+    const response =
+      await fetch(
+        provider.baseUrl,
+        {
+          method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
+          headers: {
+            "Content-Type":
+              "application/json",
 
-        Authorization: `Bearer ${
-          process.env[provider.envKey]
-        }`,
+            Authorization:
+              `Bearer ${
+                process.env[
+                  provider.envKey
+                ]
+              }`,
 
-        ...(provider.extraHeaders || {}),
-      },
+            ...(provider.extraHeaders ||
+              {}),
+          },
 
-      body: JSON.stringify({
-        model,
+          body: JSON.stringify({
+            model,
 
-        messages,
+            messages,
 
-        tools: TOOLS,
+            tools: TOOLS,
 
-        tool_choice: "auto",
+            tool_choice: "auto",
 
-        temperature: 0.7,
+            temperature: 0.7,
 
-        max_tokens: 900,
-      }),
+            max_tokens: 900,
+          }),
 
-      signal: controller.signal,
-    });
+          signal:
+            controller.signal,
+        }
+      );
 
     if (!response.ok) {
-      const raw = await response.text();
+      const raw =
+        await response.text();
 
       let parsed = {};
 
       try {
-        parsed = JSON.parse(raw);
+        parsed =
+          JSON.parse(raw);
       } catch {}
 
-      const error = new Error(
-        parsed?.error?.message ||
-          `${provider.id} returned HTTP ${response.status}`
-      );
+      const error =
+        new Error(
+          parsed?.error
+            ?.message ||
+            `${provider.id} returned HTTP ${response.status}`
+        );
 
-      error.status = response.status;
+      error.status =
+        response.status;
 
       throw error;
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
-    const choice = data?.choices?.[0];
+    const choice =
+      data?.choices?.[0];
 
     if (!choice?.message) {
-      const error = new Error(
-        `${provider.id} returned an invalid response.`
-      );
+      const error =
+        new Error(
+          `${provider.id} returned an invalid response.`
+        );
 
       error.status = 502;
 
@@ -557,16 +867,26 @@ async function callOpenAICompatible(
     }
 
     return {
-      content: choice.message.content || "",
-      tool_calls: choice.message.tool_calls || [],
+      content:
+        choice.message
+          .content || "",
+
+      tool_calls:
+        choice.message
+          .tool_calls || [],
     };
   } catch (error) {
-    if (error.name === "AbortError") {
-      const timeoutError = new Error(
-        `${provider.id} request timed out.`
-      );
+    if (
+      error.name ===
+      "AbortError"
+    ) {
+      const timeoutError =
+        new Error(
+          `${provider.id} request timed out.`
+        );
 
-      timeoutError.status = 504;
+      timeoutError.status =
+        504;
 
       throw timeoutError;
     }
@@ -578,64 +898,117 @@ async function callOpenAICompatible(
 }
 
 /*
-  --------------------------------------------------------------------------
-  GEMINI
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| GEMINI SCHEMA
+|--------------------------------------------------------------------------
 */
 
-function toGeminiSchema(schema) {
-  if (!schema || typeof schema !== "object") {
+function toGeminiSchema(
+  schema
+) {
+  if (
+    !schema ||
+    typeof schema !==
+      "object"
+  ) {
     return schema;
   }
 
-  const result = { ...schema };
+  const result = {
+    ...schema,
+  };
 
-  if (typeof result.type === "string") {
-    result.type = result.type.toUpperCase();
+  if (
+    typeof result.type ===
+    "string"
+  ) {
+    result.type =
+      result.type.toUpperCase();
   }
 
   if (result.properties) {
-    result.properties = Object.fromEntries(
-      Object.entries(result.properties).map(
-        ([key, value]) => [
-          key,
-          toGeminiSchema(value),
-        ]
-      )
-    );
-  }
-
-  if (Array.isArray(result.required)) {
-    result.required = [...result.required];
+    result.properties =
+      Object.fromEntries(
+        Object.entries(
+          result.properties
+        ).map(
+          ([key, value]) => [
+            key,
+            toGeminiSchema(
+              value
+            ),
+          ]
+        )
+      );
   }
 
   return result;
 }
 
+/*
+|--------------------------------------------------------------------------
+| GEMINI FUNCTIONS
+|--------------------------------------------------------------------------
+*/
+
 function geminiFunctionDeclarations() {
-  return TOOLS.map((tool) => ({
-    name: tool.function.name,
-    description: tool.function.description,
-    parameters: toGeminiSchema(
-      tool.function.parameters
-    ),
-  }));
+  return TOOLS.map(
+    (tool) => ({
+      name:
+        tool.function.name,
+
+      description:
+        tool.function
+          .description,
+
+      parameters:
+        toGeminiSchema(
+          tool.function
+            .parameters
+        ),
+    })
+  );
 }
 
-function toGeminiMessages(messages) {
+/*
+|--------------------------------------------------------------------------
+| GEMINI MESSAGE CONVERSION
+|--------------------------------------------------------------------------
+*/
+
+function toGeminiMessages(
+  messages
+) {
   const result = [];
 
   for (const message of messages) {
-    if (message.role === "system") {
+    /*
+    System messages are handled separately.
+    */
+
+    if (
+      message.role ===
+      "system"
+    ) {
       continue;
     }
 
-    if (message.role === "user") {
+    /*
+    User.
+    */
+
+    if (
+      message.role ===
+      "user"
+    ) {
       result.push({
         role: "user",
+
         parts: [
           {
-            text: message.content || "",
+            text:
+              message.content ||
+              "",
           },
         ],
       });
@@ -643,27 +1016,43 @@ function toGeminiMessages(messages) {
       continue;
     }
 
-    if (message.role === "assistant") {
+    /*
+    Assistant.
+    */
+
+    if (
+      message.role ===
+      "assistant"
+    ) {
       const parts = [];
 
       if (message.content) {
         parts.push({
-          text: message.content,
+          text:
+            message.content,
         });
       }
 
-      for (const call of message.tool_calls || []) {
+      for (const call of
+        message.tool_calls ||
+        []) {
         let args = {};
 
         try {
-          args = JSON.parse(
-            call.function.arguments || "{}"
-          );
+          args =
+            JSON.parse(
+              call.function
+                .arguments ||
+                "{}"
+            );
         } catch {}
 
         parts.push({
           functionCall: {
-            name: call.function.name,
+            name:
+              call.function
+                .name,
+
             args,
           },
         });
@@ -672,6 +1061,7 @@ function toGeminiMessages(messages) {
       if (parts.length > 0) {
         result.push({
           role: "model",
+
           parts,
         });
       }
@@ -679,27 +1069,40 @@ function toGeminiMessages(messages) {
       continue;
     }
 
-    if (message.role === "tool") {
+    /*
+    Tool result.
+    */
+
+    if (
+      message.role ===
+      "tool"
+    ) {
       let response = {};
 
       try {
-        response = JSON.parse(
-          message.content || "{}"
-        );
+        response =
+          JSON.parse(
+            message.content ||
+              "{}"
+          );
       } catch {
         response = {
-          result: message.content || "",
+          result:
+            message.content ||
+            "",
         };
       }
 
       result.push({
         role: "user",
+
         parts: [
           {
             functionResponse: {
               name:
                 message.name ||
                 "unknown_tool",
+
               response,
             },
           },
@@ -711,94 +1114,122 @@ function toGeminiMessages(messages) {
   return result;
 }
 
+/*
+|--------------------------------------------------------------------------
+| GEMINI REQUEST
+|--------------------------------------------------------------------------
+*/
+
 async function callGemini(
   provider,
   model,
   messages
 ) {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 25000);
+  const timeout =
+    setTimeout(() => {
+      controller.abort();
+    }, 25000);
 
   try {
-    const systemMessage = messages.find(
-      (message) => message.role === "system"
-    );
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        model
-      )}:generateContent`,
-
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key":
-            process.env[provider.envKey],
-        },
-
-        body: JSON.stringify({
-          ...(systemMessage
-            ? {
-                system_instruction: {
-                  parts: [
-                    {
-                      text:
-                        systemMessage.content,
-                    },
-                  ],
-                },
-              }
-            : {}),
-
-          contents:
-            toGeminiMessages(messages),
-
-          tools: [
-            {
-              functionDeclarations:
-                geminiFunctionDeclarations(),
-            },
-          ],
-
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 900,
-          },
-        }),
-
-        signal: controller.signal,
-      }
-    );
-
-    if (!response.ok) {
-      const raw = await response.text();
-
-      const error = new Error(
-        `Gemini HTTP ${response.status}: ${raw.slice(
-          0,
-          500
-        )}`
+    const systemMessage =
+      messages.find(
+        (message) =>
+          message.role ===
+          "system"
       );
 
-      error.status = response.status;
+    const response =
+      await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+          model
+        )}:generateContent`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "x-goog-api-key":
+              process.env[
+                provider.envKey
+              ],
+          },
+
+          body: JSON.stringify({
+            ...(systemMessage
+              ? {
+                  system_instruction: {
+                    parts: [
+                      {
+                        text:
+                          systemMessage.content,
+                      },
+                    ],
+                  },
+                }
+              : {}),
+
+            contents:
+              toGeminiMessages(
+                messages
+              ),
+
+            tools: [
+              {
+                functionDeclarations:
+                  geminiFunctionDeclarations(),
+              },
+            ],
+
+            generationConfig: {
+              maxOutputTokens: 900,
+            },
+          }),
+
+          signal:
+            controller.signal,
+        }
+      );
+
+    if (!response.ok) {
+      const raw =
+        await response.text();
+
+      let parsed = {};
+
+      try {
+        parsed =
+          JSON.parse(raw);
+      } catch {}
+
+      const error =
+        new Error(
+          parsed?.error
+            ?.message ||
+            `Gemini HTTP ${response.status}`
+        );
+
+      error.status =
+        response.status;
 
       throw error;
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     const candidate =
       data?.candidates?.[0];
 
     if (!candidate) {
-      const error = new Error(
-        "Gemini returned no candidate."
-      );
+      const error =
+        new Error(
+          "Gemini returned no candidate."
+        );
 
       error.status = 502;
 
@@ -806,44 +1237,73 @@ async function callGemini(
     }
 
     const parts =
-      candidate.content?.parts || [];
+      candidate.content?.parts ||
+      [];
 
-    const content = parts
-      .filter((part) => part.text)
-      .map((part) => part.text)
-      .join("")
-      .trim();
+    const content =
+      parts
+        .filter(
+          (part) =>
+            part.text
+        )
+        .map(
+          (part) =>
+            part.text
+        )
+        .join("")
+        .trim();
 
-    const toolCalls = parts
-      .filter((part) => part.functionCall)
-      .map((part, index) => ({
-        id:
-          part.functionCall.id ||
-          `gemini_${Date.now()}_${index}`,
+    const toolCalls =
+      parts
+        .filter(
+          (part) =>
+            part.functionCall
+        )
+        .map(
+          (
+            part,
+            index
+          ) => ({
+            id:
+              part.functionCall
+                .id ||
+              `gemini_${Date.now()}_${index}`,
 
-        type: "function",
+            type:
+              "function",
 
-        function: {
-          name:
-            part.functionCall.name,
+            function: {
+              name:
+                part.functionCall
+                  .name,
 
-          arguments: JSON.stringify(
-            part.functionCall.args || {}
-          ),
-        },
-      }));
+              arguments:
+                JSON.stringify(
+                  part.functionCall
+                    .args || {}
+                ),
+            },
+          })
+        );
 
     return {
       content,
-      tool_calls: toolCalls,
+
+      tool_calls:
+        toolCalls,
     };
   } catch (error) {
-    if (error.name === "AbortError") {
-      const timeoutError = new Error(
-        "Gemini request timed out."
-      );
+    if (
+      error.name ===
+      "AbortError"
+    ) {
+      const timeoutError =
+        new Error(
+          "Gemini request timed out."
+        );
 
-      timeoutError.status = 504;
+      timeoutError.status =
+        504;
 
       throw timeoutError;
     }
@@ -855,16 +1315,19 @@ async function callGemini(
 }
 
 /*
-  --------------------------------------------------------------------------
-  MODEL CALL
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| GENERIC MODEL CALL
+|--------------------------------------------------------------------------
 */
 
 async function callModel(
   candidate,
   messages
 ) {
-  if (candidate.provider.kind === "gemini") {
+  if (
+    candidate.provider.kind ===
+    "gemini"
+  ) {
     return callGemini(
       candidate.provider,
       candidate.model,
@@ -880,36 +1343,41 @@ async function callModel(
 }
 
 /*
-  --------------------------------------------------------------------------
-  AI ROUTER
-  --------------------------------------------------------------------------
-
-  THIS IS THE IMPORTANT PART.
-
-  We DO NOT send the same user request to every model.
-
-  Request #1:
-      Model A
-
-  If Model A succeeds:
-      STOP.
-
-  If Model A gets 429/timeout/etc:
-      Model B
-
-  If Model B succeeds:
-      STOP.
-
-  There is never a "broadcast" to all models.
+|--------------------------------------------------------------------------
+| AI ROUTER
+|--------------------------------------------------------------------------
+|
+| VERY IMPORTANT:
+|
+| Request:
+|
+|     Model A
+|       |
+|       +-- success --> STOP
+|       |
+|       +-- failure --> Model B
+|                          |
+|                          +-- success --> STOP
+|
+| The same request is NOT sent to all providers.
+|
+|--------------------------------------------------------------------------
 */
 
-async function callAI(messages) {
-  const candidates = buildCandidates();
+async function callAI(
+  messages
+) {
+  const candidates =
+    buildCandidates();
 
-  if (candidates.length === 0) {
-    const error = new Error(
-      "No AI provider is configured on the server."
-    );
+  if (
+    candidates.length ===
+    0
+  ) {
+    const error =
+      new Error(
+        "No AI provider is configured on the server."
+      );
 
     error.status = 500;
 
@@ -919,31 +1387,54 @@ async function callAI(messages) {
   let lastError = null;
 
   /*
-    Limit fallback attempts.
+  Maximum fallback attempts.
 
-    This prevents a single user message from generating
-    a huge number of unwanted provider requests.
+  Default = 3.
+
+  This prevents a request from
+  hitting every possible provider.
   */
-  const maxAttempts = Math.min(
-    candidates.length,
-    Number(process.env.MAX_AI_ATTEMPTS || 3)
-  );
+
+  const maxAttempts =
+    Math.min(
+      candidates.length,
+
+      Number(
+        process.env.MAX_AI_ATTEMPTS ||
+          3
+      )
+    );
+
+  /*
+  Remember which candidate we started with.
+  */
+
+  const startingCandidate =
+    candidates[0];
 
   for (
     let attempt = 0;
     attempt < maxAttempts;
     attempt++
   ) {
-    const candidate = candidates[attempt];
+    const candidate =
+      candidates[attempt];
 
     /*
-      Never intentionally use a cooled-down model unless
-      every healthy candidate has been exhausted.
+    If candidate is cooling down,
+    skip it while healthy candidates
+    are available.
     */
+
     if (
-      isCoolingDown(candidate.key) &&
+      isCoolingDown(
+        candidate.key
+      ) &&
       candidates.some(
-        (item) => !isCoolingDown(item.key)
+        (item) =>
+          !isCoolingDown(
+            item.key
+          )
       )
     ) {
       continue;
@@ -951,23 +1442,31 @@ async function callAI(messages) {
 
     try {
       console.log(
-        `[AI] Attempt ${attempt + 1}/${maxAttempts}: ${candidate.provider.id}/${candidate.model}`
+        `[AI] Attempt ${
+          attempt + 1
+        }/${maxAttempts}: ${
+          candidate.provider.id
+        }/${candidate.model}`
       );
 
-      const message = await callModel(
-        candidate,
-        messages
-      );
+      const message =
+        await callModel(
+          candidate,
+          messages
+        );
 
       /*
-        SUCCESS.
+      SUCCESS.
 
-        Immediately stop.
-        No other model receives this request.
+      Stop immediately.
       */
-      lastSuccessfulCandidate = candidate;
 
-      clearCooldown(candidate.key);
+      lastSuccessfulCandidate =
+        candidate;
+
+      clearCooldown(
+        candidate.key
+      );
 
       console.log(
         `[AI] Success: ${candidate.provider.id}/${candidate.model}`
@@ -975,21 +1474,36 @@ async function callAI(messages) {
 
       return {
         message,
-        providerId: candidate.provider.id,
-        model: candidate.model,
+
+        providerId:
+          candidate.provider
+            .id,
+
+        model:
+          candidate.model,
+
+        /*
+        TRUE only if we had to move
+        away from the initial candidate.
+        */
+
         switched:
-          lastSuccessfulCandidate &&
-          lastSuccessfulCandidate.key !==
+          attempt > 0 &&
+          startingCandidate.key !==
             candidate.key,
       };
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
 
       const classification =
-        classifyError(error);
+        classifyError(
+          error
+        );
 
       setCooldown(
         candidate.key,
+
         classification.cooldown
       );
 
@@ -997,74 +1511,85 @@ async function callAI(messages) {
         `[AI] Failed ${candidate.provider.id}/${candidate.model}: ${error.message}`
       );
 
-      /*
-        Continue ONLY because this request failed.
-      */
+      console.error(
+        `[AI] Reason: ${classification.reason}`
+      );
 
-      if (!classification.retry) {
-        break;
-      }
+      /*
+      Continue only because the
+      current provider failed.
+      */
     }
   }
 
-  const error = new Error(
-    lastError?.message ||
-      "All available AI models failed."
-  );
+  const error =
+    new Error(
+      lastError?.message ||
+        "All available AI models failed."
+    );
 
-  error.status = lastError?.status || 502;
+  error.status =
+    lastError?.status ||
+    502;
 
   throw error;
 }
 
 /*
-  --------------------------------------------------------------------------
-  PERSONALITY
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| SYSTEM PROMPT
+|--------------------------------------------------------------------------
 */
 
-function buildSystemPrompt(memoryFacts) {
+function buildSystemPrompt(
+  memoryFacts
+) {
   const memoryText =
     memoryFacts.length > 0
       ? `
 
 Known user memories:
 ${memoryFacts
-  .map((fact) => `- ${fact.fact}`)
+  .map(
+    (fact) =>
+      `- ${fact.fact}`
+  )
   .join("\n")}`
       : "";
 
   return `
 You are Aria, a helpful AI voice companion.
 
-Be natural, friendly and concise.
+Be natural, friendly, accurate and concise.
 
 Rules:
+
 - Answer the user's actual question directly.
 - Do not mention internal model routing unless necessary.
 - Do not invent tool results.
 - Use a tool only when the user actually needs that tool.
 - Do not call tools unnecessarily.
-- If a user asks normal conversational, coding, educational or reasoning questions, answer normally.
+- If the user asks a normal conversational, educational, coding, reasoning or general question, answer normally.
 - If the user explicitly asks for a reminder, use set_reminder.
 - If the user explicitly asks to save a note, use save_note.
 - If the user explicitly asks you to remember something, use remember_fact.
 - Use get_weather for current weather.
-- Use calculate for calculations when appropriate.
-- Use open_app_or_url when the user explicitly asks you to open a website.
-- Use search_web when external/current web information is actually required.
-- After a tool succeeds, give a short natural confirmation.
-- Never claim that you opened a website if the browser action was not returned.
-- Keep normal responses concise unless the user asks for detailed information.
+- Use calculate for calculations.
+- Use open_app_or_url only when the user explicitly asks to open something.
+- Use search_web only when external/current information is actually required.
+- After a tool succeeds, give a natural confirmation.
+- Never claim to have performed an action that wasn't actually performed.
+- Keep normal responses concise unless the user requests detail.
+- For explanations, structure the answer clearly so it works well both as text and spoken audio.
 
 ${memoryText}
 `;
 }
 
 /*
-  --------------------------------------------------------------------------
-  DATABASE HELPERS
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| CONVERSATION
+|--------------------------------------------------------------------------
 */
 
 async function loadConversation() {
@@ -1074,9 +1599,13 @@ async function loadConversation() {
 
   try {
     const document =
-      await Conversation.findOne().lean();
+      await Conversation.findOne()
+        .lean();
 
-    return document?.messages || [];
+    return (
+      document?.messages ||
+      []
+    );
   } catch (error) {
     console.error(
       "loadConversation:",
@@ -1087,7 +1616,9 @@ async function loadConversation() {
   }
 }
 
-async function saveConversation(messages) {
+async function saveConversation(
+  messages
+) {
   if (!mongoReady) {
     return;
   }
@@ -1095,14 +1626,21 @@ async function saveConversation(messages) {
   try {
     await Conversation.findOneAndUpdate(
       {},
+
       {
         messages,
-        updatedAt: new Date(),
+
+        updatedAt:
+          new Date(),
       },
+
       {
         upsert: true,
+
         new: true,
-        setDefaultsOnInsert: true,
+
+        setDefaultsOnInsert:
+          true,
       }
     );
   } catch (error) {
@@ -1114,44 +1652,52 @@ async function saveConversation(messages) {
 }
 
 /*
-  --------------------------------------------------------------------------
-  HEALTH
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| HEALTH
+|--------------------------------------------------------------------------
 */
 
-app.get("/health", async (req, res) => {
-  res.json({
-    ok: true,
+app.get(
+  "/health",
+  async (req, res) => {
+    res.json({
+      ok: true,
 
-    service: "aria-api",
+      service:
+        "aria-api",
 
-    database:
-      mongoReady
-        ? "connected"
-        : "disconnected",
+      database:
+        mongoReady
+          ? "connected"
+          : "disconnected",
 
-    configuredProviders:
-      PROVIDERS.map(
-        (provider) => provider.id
-      ),
+      configuredProviders:
+        PROVIDERS.map(
+          (provider) =>
+            provider.id
+        ),
 
-    lastUsed:
-      lastSuccessfulCandidate
-        ? `${lastSuccessfulCandidate.provider.id}/${lastSuccessfulCandidate.model}`
-        : null,
+      lastUsed:
+        lastSuccessfulCandidate
+          ? `${lastSuccessfulCandidate.provider.id}/${lastSuccessfulCandidate.model}`
+          : null,
 
-    maxAIAttempts: Number(
-      process.env.MAX_AI_ATTEMPTS || 3
-    ),
+      maxAIAttempts:
+        Number(
+          process.env.MAX_AI_ATTEMPTS ||
+            3
+        ),
 
-    timestamp: new Date().toISOString(),
-  });
-});
+      timestamp:
+        new Date().toISOString(),
+    });
+  }
+);
 
 /*
-  --------------------------------------------------------------------------
-  CONVERSATION
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| CONVERSATION API
+|--------------------------------------------------------------------------
 */
 
 app.get(
@@ -1161,7 +1707,9 @@ app.get(
       const messages =
         await loadConversation();
 
-      res.json({ messages });
+      res.json({
+        messages,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1180,17 +1728,23 @@ app.post(
       if (mongoReady) {
         await Conversation.findOneAndUpdate(
           {},
+
           {
             messages: [],
-            updatedAt: new Date(),
+
+            updatedAt:
+              new Date(),
           },
+
           {
             upsert: true,
           }
         );
       }
 
-      res.json({ ok: true });
+      res.json({
+        ok: true,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1203,9 +1757,9 @@ app.post(
 );
 
 /*
-  --------------------------------------------------------------------------
-  REMINDERS
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| REMINDERS
+|--------------------------------------------------------------------------
 */
 
 app.get(
@@ -1222,10 +1776,14 @@ app.get(
         await Reminder.find({
           delivered: false,
         })
-          .sort({ dueAt: 1 })
+          .sort({
+            dueAt: 1,
+          })
           .lean();
 
-      res.json({ reminders });
+      res.json({
+        reminders,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1250,6 +1808,7 @@ app.get(
       const due =
         await Reminder.find({
           delivered: false,
+
           dueAt: {
             $lte: new Date(),
           },
@@ -1260,10 +1819,12 @@ app.get(
           {
             _id: {
               $in: due.map(
-                (item) => item._id
+                (item) =>
+                  item._id
               ),
             },
           },
+
           {
             $set: {
               delivered: true,
@@ -1272,7 +1833,9 @@ app.get(
         );
       }
 
-      res.json({ due });
+      res.json({
+        due,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1294,15 +1857,21 @@ app.delete(
         );
       }
 
-      const reminders = mongoReady
-        ? await Reminder.find({
-            delivered: false,
-          })
-            .sort({ dueAt: 1 })
-            .lean()
-        : [];
+      const reminders =
+        mongoReady
+          ? await Reminder.find({
+              delivered:
+                false,
+            })
+              .sort({
+                dueAt: 1,
+              })
+              .lean()
+          : [];
 
-      res.json({ reminders });
+      res.json({
+        reminders,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1315,9 +1884,9 @@ app.delete(
 );
 
 /*
-  --------------------------------------------------------------------------
-  NOTES
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| NOTES
+|--------------------------------------------------------------------------
 */
 
 app.get(
@@ -1332,15 +1901,20 @@ app.get(
 
       const notes =
         await Note.find()
-          .sort({ createdAt: -1 })
+          .sort({
+            createdAt: -1,
+          })
           .lean();
 
-      res.json({ notes });
+      res.json({
+        notes,
+      });
     } catch (error) {
       console.error(error);
 
       res.status(500).json({
-        error: "Unable to load notes.",
+        error:
+          "Unable to load notes.",
       });
     }
   }
@@ -1356,27 +1930,33 @@ app.delete(
         );
       }
 
-      const notes = mongoReady
-        ? await Note.find()
-            .sort({ createdAt: -1 })
-            .lean()
-        : [];
+      const notes =
+        mongoReady
+          ? await Note.find()
+              .sort({
+                createdAt: -1,
+              })
+              .lean()
+          : [];
 
-      res.json({ notes });
+      res.json({
+        notes,
+      });
     } catch (error) {
       console.error(error);
 
       res.status(500).json({
-        error: "Unable to delete note.",
+        error:
+          "Unable to delete note.",
       });
     }
   }
 );
 
 /*
-  --------------------------------------------------------------------------
-  MEMORY
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| MEMORY
+|--------------------------------------------------------------------------
 */
 
 app.get(
@@ -1391,10 +1971,14 @@ app.get(
 
       const facts =
         await Memory.find()
-          .sort({ createdAt: -1 })
+          .sort({
+            createdAt: -1,
+          })
           .lean();
 
-      res.json({ facts });
+      res.json({
+        facts,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1416,13 +2000,18 @@ app.delete(
         );
       }
 
-      const facts = mongoReady
-        ? await Memory.find()
-            .sort({ createdAt: -1 })
-            .lean()
-        : [];
+      const facts =
+        mongoReady
+          ? await Memory.find()
+              .sort({
+                createdAt: -1,
+              })
+              .lean()
+          : [];
 
-      res.json({ facts });
+      res.json({
+        facts,
+      });
     } catch (error) {
       console.error(error);
 
@@ -1435,19 +2024,22 @@ app.delete(
 );
 
 /*
-  --------------------------------------------------------------------------
-  CHAT
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| CHAT
+|--------------------------------------------------------------------------
 */
 
 app.post(
   "/api/chat",
   async (req, res) => {
-    const startedAt = Date.now();
+    const startedAt =
+      Date.now();
 
     try {
       const userMessage =
-        typeof req.body?.message === "string"
+        typeof req.body
+          ?.message ===
+        "string"
           ? req.body.message.trim()
           : "";
 
@@ -1458,14 +2050,20 @@ app.post(
         });
       }
 
-      if (userMessage.length > 12000) {
+      if (
+        userMessage.length >
+        12000
+      ) {
         return res.status(400).json({
           error:
             "Message is too long.",
         });
       }
 
-      if (PROVIDERS.length === 0) {
+      if (
+        PROVIDERS.length ===
+        0
+      ) {
         return res.status(503).json({
           error:
             "No AI provider is configured. Add at least one AI API key to Render.",
@@ -1473,122 +2071,161 @@ app.post(
       }
 
       /*
-        Load memory.
-
-        If MongoDB is temporarily unavailable, Aria can still answer.
+      Load memory.
       */
-      const memoryFacts = mongoReady
-        ? await Memory.find()
-            .sort({ createdAt: -1 })
-            .limit(30)
-            .lean()
-        : [];
+
+      const memoryFacts =
+        mongoReady
+          ? await Memory.find()
+              .sort({
+                createdAt: -1,
+              })
+              .limit(30)
+              .lean()
+          : [];
 
       /*
-        Load conversation.
+      Load conversation.
       */
+
       const history =
         await loadConversation();
 
       /*
-        Keep only a safe number of messages.
+      Keep history under control.
       */
-      const trimmedHistory =
-        history.slice(-HISTORY_WINDOW);
 
-      const systemMessage = {
-        role: "system",
-        content:
-          buildSystemPrompt(memoryFacts),
-      };
+      const trimmedHistory =
+        history.slice(
+          -HISTORY_WINDOW
+        );
+
+      /*
+      Build model messages.
+      */
 
       let messages = [
-        systemMessage,
+        {
+          role: "system",
+
+          content:
+            buildSystemPrompt(
+              memoryFacts
+            ),
+        },
+
         ...trimmedHistory,
+
         {
           role: "user",
-          content: userMessage,
+
+          content:
+            userMessage,
         },
       ];
 
       const actions = [];
 
       let finalText = "";
+
       let providerId = null;
+
       let model = null;
+
       let switched = false;
 
       /*
-        Tool loop.
+      Tool loop.
 
-        One model request occurs here.
+      One model request is made.
 
-        If it asks for a tool:
-          execute tool
-          give tool result back to SAME model
+      If it asks for a tool:
+        execute tool
+        send tool result back
 
-        It does NOT automatically call every model.
-
-        If a model itself fails, callAI() handles fallback.
+      It does not broadcast the original
+      request to all models.
       */
+
       for (
         let iteration = 0;
-        iteration < MAX_TOOL_ITERATIONS;
+        iteration <
+        MAX_TOOL_ITERATIONS;
         iteration++
       ) {
         const result =
-          await callAI(messages);
+          await callAI(
+            messages
+          );
 
         providerId =
           result.providerId;
 
-        model = result.model;
+        model =
+          result.model;
 
         switched =
-          result.switched || false;
+          result.switched;
 
         const assistantMessage =
           result.message;
 
         const toolCalls =
-          assistantMessage.tool_calls || [];
+          assistantMessage.tool_calls ||
+          [];
 
         /*
-          Normal answer.
+        Normal answer.
         */
-        if (toolCalls.length === 0) {
-          finalText = String(
-            assistantMessage.content || ""
-          ).trim();
+
+        if (
+          toolCalls.length ===
+          0
+        ) {
+          finalText =
+            String(
+              assistantMessage.content ||
+                ""
+            ).trim();
 
           break;
         }
 
         /*
-          Add assistant tool-call message.
+        Add assistant message with
+        tool calls.
         */
+
         messages.push({
           role: "assistant",
+
           content:
             assistantMessage.content ||
             null,
-          tool_calls: toolCalls,
+
+          tool_calls:
+            toolCalls,
         });
 
         /*
-          Execute requested tools.
+        Execute each requested tool.
         */
+
         for (const toolCall of toolCalls) {
           const toolName =
-            toolCall?.function?.name;
+            toolCall?.function
+              ?.name;
 
           let args = {};
 
           try {
-            args = JSON.parse(
-              toolCall?.function
-                ?.arguments || "{}"
-            );
+            args =
+              JSON.parse(
+                toolCall
+                  ?.function
+                  ?.arguments ||
+                  "{}"
+              );
           } catch {
             args = {};
           }
@@ -1605,8 +2242,9 @@ app.post(
             );
 
           /*
-            Persist database actions.
+          Persist reminder/note/memory.
           */
+
           if (
             mongoReady &&
             toolResult.persistence
@@ -1619,32 +2257,46 @@ app.post(
                 persistence.type ===
                 "reminder"
               ) {
-                await Reminder.create({
-                  text: persistence.text,
-                  dueAt:
-                    persistence.dueAt,
-                  delivered: false,
-                });
+                await Reminder.create(
+                  {
+                    text:
+                      persistence.text,
+
+                    dueAt:
+                      persistence.dueAt,
+
+                    delivered:
+                      false,
+                  }
+                );
               }
 
               if (
                 persistence.type ===
                 "note"
               ) {
-                await Note.create({
-                  text: persistence.text,
-                });
+                await Note.create(
+                  {
+                    text:
+                      persistence.text,
+                  }
+                );
               }
 
               if (
                 persistence.type ===
                 "memory"
               ) {
-                await Memory.create({
-                  fact: persistence.fact,
-                });
+                await Memory.create(
+                  {
+                    fact:
+                      persistence.fact,
+                  }
+                );
               }
-            } catch (databaseError) {
+            } catch (
+              databaseError
+            ) {
               console.error(
                 "Tool persistence error:",
                 databaseError.message
@@ -1652,27 +2304,37 @@ app.post(
             }
           }
 
-          if (toolResult.action) {
+          /*
+          Browser action.
+          */
+
+          if (
+            toolResult.action
+          ) {
             actions.push(
               toolResult.action
             );
           }
 
           /*
-            Give the result back to the model.
+          Send tool result back
+          to the model.
           */
+
           messages.push({
             role: "tool",
 
             tool_call_id:
               toolCall.id,
 
-            name: toolName,
+            name:
+              toolName,
 
-            content: JSON.stringify(
-              toolResult.functionResponse ||
-                {}
-            ),
+            content:
+              JSON.stringify(
+                toolResult.functionResponse ||
+                  {}
+              ),
           });
         }
       }
@@ -1683,37 +2345,52 @@ app.post(
       }
 
       /*
-        Save only the actual user + final assistant messages.
-        Tool messages are not needed for the UI history.
+      Save conversation.
+
+      Only user/final assistant messages
+      are persisted for clean history.
       */
+
       const newHistory = [
         ...history,
+
         {
           role: "user",
-          content: userMessage,
+
+          content:
+            userMessage,
         },
+
         {
           role: "assistant",
-          content: finalText,
+
+          content:
+            finalText,
         },
-      ].slice(-HISTORY_WINDOW);
+      ].slice(
+        -HISTORY_WINDOW
+      );
 
       await saveConversation(
         newHistory
       );
 
+      const elapsedMs =
+        Date.now() -
+        startedAt;
+
       console.log(
-        `[CHAT] ${providerId}/${model} completed in ${
-          Date.now() - startedAt
-        }ms`
+        `[CHAT] ${providerId}/${model} completed in ${elapsedMs}ms`
       );
 
       res.json({
-        reply: finalText,
+        reply:
+          finalText,
 
         actions,
 
-        provider: providerId,
+        provider:
+          providerId,
 
         model,
 
@@ -1724,8 +2401,7 @@ app.post(
             ? "connected"
             : "unavailable",
 
-        elapsedMs:
-          Date.now() - startedAt,
+        elapsedMs,
       });
     } catch (error) {
       console.error(
@@ -1734,9 +2410,15 @@ app.post(
       );
 
       const status =
-        Number(error.status) >= 400 &&
-        Number(error.status) < 600
-          ? Number(error.status)
+        Number(
+          error.status
+        ) >= 400 &&
+        Number(
+          error.status
+        ) < 600
+          ? Number(
+              error.status
+            )
           : 500;
 
       res.status(status).json({
@@ -1745,39 +2427,52 @@ app.post(
           "Aria failed to process the request.",
 
         elapsedMs:
-          Date.now() - startedAt,
+          Date.now() -
+          startedAt,
       });
     }
   }
 );
 
 /*
-  --------------------------------------------------------------------------
-  404
-  --------------------------------------------------------------------------
-*/
-
-app.use((req, res) => {
-  res.status(404).json({
-    error: `Route not found: ${req.method} ${req.path}`,
-  });
-});
-
-/*
-  --------------------------------------------------------------------------
-  GLOBAL ERROR HANDLER
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| 404
+|--------------------------------------------------------------------------
 */
 
 app.use(
-  (error, req, res, next) => {
+  (req, res) => {
+    res.status(404).json({
+      error:
+        `Route not found: ${req.method} ${req.path}`,
+    });
+  }
+);
+
+/*
+|--------------------------------------------------------------------------
+| GLOBAL ERROR
+|--------------------------------------------------------------------------
+*/
+
+app.use(
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
     console.error(
       "Unhandled Express error:",
       error
     );
 
-    if (res.headersSent) {
-      return next(error);
+    if (
+      res.headersSent
+    ) {
+      return next(
+        error
+      );
     }
 
     res.status(500).json({
@@ -1788,9 +2483,9 @@ app.use(
 );
 
 /*
-  --------------------------------------------------------------------------
-  START SERVER
-  --------------------------------------------------------------------------
+|--------------------------------------------------------------------------
+| START SERVER
+|--------------------------------------------------------------------------
 */
 
 app.listen(
@@ -1803,12 +2498,14 @@ app.listen(
 
     console.log(
       `Configured AI providers: ${
-        PROVIDERS.map(
-          (provider) =>
-            `${provider.id}[${provider.models.join(
-              ", "
-            )}]`
-        ).join(" | ") || "NONE"
+        PROVIDERS.length > 0
+          ? PROVIDERS.map(
+              (provider) =>
+                `${provider.id}[${provider.models.join(
+                  ", "
+                )}]`
+            ).join(" | ")
+          : "NONE"
       }`
     );
   }

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const API_KEY = "aria_server_url";
+const API_STORAGE_KEY = "aria_server_url";
 
 function getApiBase() {
-  const saved = localStorage.getItem(API_KEY);
+  const saved = localStorage.getItem(API_STORAGE_KEY);
 
   if (saved) {
     return saved.replace(/\/+$/, "");
@@ -15,7 +15,10 @@ function getApiBase() {
     return envUrl.replace(/\/+$/, "");
   }
 
-  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+  if (
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+  ) {
     return "http://localhost:3001";
   }
 
@@ -23,20 +26,34 @@ function getApiBase() {
 }
 
 function openUrl(url) {
-  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  const popup = window.open(
+    url,
+    "_blank",
+    "noopener,noreferrer"
+  );
 
-  if (!popup) {
-    return false;
-  }
-
-  return true;
+  return Boolean(popup);
 }
+
+/*
+|--------------------------------------------------------------------------
+| LOCAL COMMANDS
+|--------------------------------------------------------------------------
+|
+| These commands NEVER go to an LLM.
+|
+| This prevents unnecessary API usage.
+|
+*/
 
 function runLocalCommand(text) {
   const value = text.trim();
   const lower = value.toLowerCase();
 
-  // Calculator
+  /*
+  Calculator
+  */
+
   const calcMatch = lower.match(
     /^(?:calculate|compute|what is)\s+([0-9+\-*/().%\s]+)$/
   );
@@ -51,7 +68,9 @@ function runLocalCommand(text) {
         return null;
       }
 
-      const result = Function(`"use strict"; return (${expression})`)();
+      const result = Function(
+        `"use strict"; return (${expression})`
+      )();
 
       if (Number.isFinite(result)) {
         return {
@@ -67,7 +86,10 @@ function runLocalCommand(text) {
     }
   }
 
-  // Time
+  /*
+  Current time
+  */
+
   if (
     lower === "what time is it" ||
     lower === "what's the time" ||
@@ -83,7 +105,10 @@ function runLocalCommand(text) {
     };
   }
 
-  // Date
+  /*
+  Current date
+  */
+
   if (
     lower === "what date is it" ||
     lower === "today's date" ||
@@ -100,8 +125,13 @@ function runLocalCommand(text) {
     };
   }
 
-  // Open common websites
-  const openMatch = lower.match(/^(?:open|launch|go to)\s+(.+)$/);
+  /*
+  Open websites
+  */
+
+  const openMatch = lower.match(
+    /^(?:open|launch|go to)\s+(.+)$/
+  );
 
   if (openMatch) {
     const target = openMatch[1]
@@ -136,13 +166,14 @@ function runLocalCommand(text) {
       return {
         reply: success
           ? `Opening ${target}.`
-          : `Your browser blocked the popup. Please allow popups for this site.`,
+          : "Your browser blocked the popup. Please allow popups.",
         local: true,
       };
     }
 
     if (/^[a-z0-9-]+\.[a-z]{2,}$/i.test(target)) {
       const url = `https://${target}`;
+
       const success = openUrl(url);
 
       return {
@@ -154,12 +185,20 @@ function runLocalCommand(text) {
     }
   }
 
-  // Google search
-  let match = lower.match(/^search (?:google|the web) for (.+)$/);
+  /*
+  Google search
+  */
+
+  let match = lower.match(
+    /^search (?:google|the web) for (.+)$/
+  );
 
   if (match) {
     const query = match[1].trim();
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+
+    const url =
+      `https://www.google.com/search?q=` +
+      encodeURIComponent(query);
 
     const success = openUrl(url);
 
@@ -171,12 +210,20 @@ function runLocalCommand(text) {
     };
   }
 
-  // YouTube search
-  match = lower.match(/^search youtube for (.+)$/);
+  /*
+  YouTube search
+  */
+
+  match = lower.match(
+    /^search youtube for (.+)$/
+  );
 
   if (match) {
     const query = match[1].trim();
-    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+
+    const url =
+      `https://www.youtube.com/results?search_query=` +
+      encodeURIComponent(query);
 
     const success = openUrl(url);
 
@@ -191,6 +238,12 @@ function runLocalCommand(text) {
   return null;
 }
 
+/*
+|--------------------------------------------------------------------------
+| MESSAGE
+|--------------------------------------------------------------------------
+*/
+
 function Message({ message }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -198,20 +251,33 @@ function Message({ message }) {
   return (
     <div
       className={`message-row ${
-        isUser ? "user-row" : isSystem ? "system-row" : "assistant-row"
+        isUser
+          ? "user-row"
+          : isSystem
+          ? "system-row"
+          : "assistant-row"
       }`}
     >
       <div
         className={`message ${
-          isUser ? "user-message" : isSystem ? "system-message" : "assistant-message"
+          isUser
+            ? "user-message"
+            : isSystem
+            ? "system-message"
+            : "assistant-message"
         }`}
       >
-        {!isUser && !isSystem && <div className="message-label">ARIA</div>}
-        {isSystem && <div className="message-label">SYSTEM</div>}
+        {!isUser && (
+          <div className="message-label">
+            {isSystem ? "SYSTEM" : "ARIA"}
+          </div>
+        )}
 
-        <div className="message-text">{message.content}</div>
+        <div className="message-text">
+          {message.content}
+        </div>
 
-        {message.provider && (
+        {!isUser && message.provider && (
           <div className="message-meta">
             {message.provider}/{message.model}
           </div>
@@ -220,6 +286,12 @@ function Message({ message }) {
     </div>
   );
 }
+
+/*
+|--------------------------------------------------------------------------
+| APP
+|--------------------------------------------------------------------------
+*/
 
 export default function App() {
   const [messages, setMessages] = useState([
@@ -231,32 +303,90 @@ export default function App() {
   ]);
 
   const [input, setInput] = useState("");
+
   const [busy, setBusy] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [health, setHealth] = useState(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [serverUrl, setServerUrl] = useState(getApiBase());
 
-  const [reminders, setReminders] = useState([]);
-  const [notes, setNotes] = useState([]);
-  const [memory, setMemory] = useState([]);
+  const [connected, setConnected] =
+    useState(false);
 
-  const [panel, setPanel] = useState("reminders");
+  const [health, setHealth] =
+    useState(null);
 
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [listening, setListening] = useState(false);
+  const [sidebarOpen, setSidebarOpen] =
+    useState(false);
 
-  const messagesEndRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const inputRef = useRef(null);
+  const [settingsOpen, setSettingsOpen] =
+    useState(false);
 
-  const speechSupported = useMemo(
-    () =>
-      typeof window !== "undefined" &&
-      !!(window.SpeechRecognition || window.webkitSpeechRecognition),
-    []
-  );
+  const [serverUrl, setServerUrl] =
+    useState(getApiBase());
+
+  const [reminders, setReminders] =
+    useState([]);
+
+  const [notes, setNotes] =
+    useState([]);
+
+  const [memory, setMemory] =
+    useState([]);
+
+  const [panel, setPanel] =
+    useState("reminders");
+
+  /*
+  Voice settings
+  */
+
+  const [voiceEnabled, setVoiceEnabled] =
+    useState(true);
+
+  const [continuousVoice, setContinuousVoice] =
+    useState(false);
+
+  const [listening, setListening] =
+    useState(false);
+
+  const [speaking, setSpeaking] =
+    useState(false);
+
+  const messagesEndRef =
+    useRef(null);
+
+  const recognitionRef =
+    useRef(null);
+
+  const inputRef =
+    useRef(null);
+
+  const continuousVoiceRef =
+    useRef(false);
+
+  const busyRef =
+    useRef(false);
+
+  const speechSupported =
+    typeof window !== "undefined" &&
+    Boolean(
+      window.SpeechRecognition ||
+        window.webkitSpeechRecognition
+    );
+
+  /*
+  Keep refs synchronized.
+  */
+
+  useEffect(() => {
+    continuousVoiceRef.current =
+      continuousVoice;
+  }, [continuousVoice]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  /*
+  Auto-scroll.
+  */
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
@@ -265,27 +395,48 @@ export default function App() {
     });
   }, [messages, busy]);
 
+  /*
+  Initial loading.
+  */
+
   useEffect(() => {
     checkHealth();
     loadData();
 
     return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {}
+      stopVoiceRecognition();
+
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
       }
     };
   }, []);
 
+  /*
+  Health check
+  */
+
   async function checkHealth() {
+    const base = getApiBase();
+
+    if (!base) {
+      setConnected(false);
+      setHealth(null);
+      return;
+    }
+
     try {
-      const response = await fetch(`${getApiBase()}/health`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `${base}/health`,
+        {
+          cache: "no-store",
+        }
+      );
 
       if (!response.ok) {
-        throw new Error(`Health check failed: ${response.status}`);
+        throw new Error(
+          `Health check failed: ${response.status}`
+        );
       }
 
       const data = await response.json();
@@ -293,64 +444,122 @@ export default function App() {
       setHealth(data);
       setConnected(Boolean(data.ok));
     } catch (error) {
-      console.error("Health check error:", error);
+      console.error(
+        "Health check error:",
+        error
+      );
+
       setConnected(false);
+      setHealth(null);
     }
   }
+
+  /*
+  Load MongoDB data.
+  */
 
   async function loadData() {
     const base = getApiBase();
 
-    try {
-      const results = await Promise.allSettled([
-        fetch(`${base}/api/conversation`).then((r) => r.json()),
-        fetch(`${base}/api/reminders`).then((r) => r.json()),
-        fetch(`${base}/api/notes`).then((r) => r.json()),
-        fetch(`${base}/api/memory`).then((r) => r.json()),
-      ]);
+    if (!base) return;
 
-      const conversation = results[0];
+    const endpoints = [
+      `${base}/api/conversation`,
+      `${base}/api/reminders`,
+      `${base}/api/notes`,
+      `${base}/api/memory`,
+    ];
 
-      if (conversation.status === "fulfilled") {
-        const stored = conversation.value?.messages || [];
+    const results =
+      await Promise.allSettled(
+        endpoints.map((url) =>
+          fetch(url).then((response) => {
+            if (!response.ok) {
+              throw new Error(
+                `${response.status}`
+              );
+            }
 
-        if (stored.length > 0) {
-          setMessages([
-            {
-              role: "assistant",
-              content: "Welcome back. What would you like to do?",
-            },
-            ...stored,
-          ]);
-        }
+            return response.json();
+          })
+        )
+      );
+
+    if (
+      results[0]?.status ===
+      "fulfilled"
+    ) {
+      const stored =
+        results[0].value?.messages || [];
+
+      if (stored.length > 0) {
+        setMessages([
+          {
+            role: "assistant",
+            content:
+              "Welcome back. What would you like to do?",
+          },
+          ...stored,
+        ]);
       }
+    }
 
-      if (results[1].status === "fulfilled") {
-        setReminders(results[1].value?.reminders || []);
-      }
+    if (
+      results[1]?.status ===
+      "fulfilled"
+    ) {
+      setReminders(
+        results[1].value?.reminders || []
+      );
+    }
 
-      if (results[2].status === "fulfilled") {
-        setNotes(results[2].value?.notes || []);
-      }
+    if (
+      results[2]?.status ===
+      "fulfilled"
+    ) {
+      setNotes(
+        results[2].value?.notes || []
+      );
+    }
 
-      if (results[3].status === "fulfilled") {
-        setMemory(results[3].value?.facts || []);
-      }
-    } catch (error) {
-      console.error("Data loading error:", error);
+    if (
+      results[3]?.status ===
+      "fulfilled"
+    ) {
+      setMemory(
+        results[3].value?.facts || []
+      );
     }
   }
 
+  /*
+  Send message to backend.
+  */
+
   async function sendToBackend(text) {
-    const response = await fetch(`${getApiBase()}/api/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: text,
-      }),
-    });
+    const base = getApiBase();
+
+    if (!base) {
+      throw new Error(
+        "Backend URL is not configured."
+      );
+    }
+
+    const response = await fetch(
+      `${base}/api/chat`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+
+        body: JSON.stringify({
+          message: text,
+        }),
+      }
+    );
 
     let data = {};
 
@@ -358,124 +567,108 @@ export default function App() {
       data = await response.json();
     } catch {
       throw new Error(
-        `Server returned ${response.status} without valid JSON.`
+        `Server returned HTTP ${response.status} with an invalid response.`
       );
     }
 
     if (!response.ok) {
       throw new Error(
-        data.error || `Server returned HTTP ${response.status}.`
+        data.error ||
+          `Server returned HTTP ${response.status}.`
       );
     }
 
     return data;
   }
 
+  /*
+  Speak AI response.
+  */
+
   function speak(text) {
-    if (!voiceEnabled || !window.speechSynthesis) return;
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-
-    window.speechSynthesis.speak(utterance);
-  }
-
-  async function handleSend(event) {
-    event?.preventDefault();
-
-    const text = input.trim();
-
-    if (!text || busy) return;
-
-    setInput("");
-
-    setMessages((previous) => [
-      ...previous,
-      {
-        role: "user",
-        content: text,
-      },
-    ]);
-
-    // Important:
-    // Local commands are handled WITHOUT sending anything to an LLM.
-    const localResult = runLocalCommand(text);
-
-    if (localResult) {
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          content: localResult.reply,
-        },
-      ]);
-
-      speak(localResult.reply);
+    if (
+      !voiceEnabled ||
+      !window.speechSynthesis ||
+      !text
+    ) {
       return;
     }
 
-    setBusy(true);
+    window.speechSynthesis.cancel();
 
-    try {
-      const data = await sendToBackend(text);
+    const utterance =
+      new SpeechSynthesisUtterance(text);
 
-      if (data.action) {
-        handleAction(data.action);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+
+    utterance.onstart = () => {
+      setSpeaking(true);
+    };
+
+    utterance.onend = () => {
+      setSpeaking(false);
+
+      /*
+      After Aria finishes speaking,
+      continuous mode listens again.
+      */
+
+      if (
+        continuousVoiceRef.current &&
+        !busyRef.current
+      ) {
+        setTimeout(() => {
+          startVoiceRecognition();
+        }, 400);
       }
+    };
 
-      if (Array.isArray(data.actions)) {
-        data.actions.forEach(handleAction);
+    utterance.onerror = () => {
+      setSpeaking(false);
+
+      if (
+        continuousVoiceRef.current &&
+        !busyRef.current
+      ) {
+        setTimeout(() => {
+          startVoiceRecognition();
+        }, 500);
       }
+    };
 
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          content: data.reply || "I received the request but got no response.",
-          provider: data.provider,
-          model: data.model,
-        },
-      ]);
-
-      if (data.reply) {
-        speak(data.reply);
-      }
-
-      if (data.switched) {
-        setMessages((previous) => [
-          ...previous,
-          {
-            role: "system",
-            content: `I automatically switched to ${data.provider}/${data.model}.`,
-          },
-        ]);
-      }
-
-      await loadData();
-    } catch (error) {
-      console.error("Chat error:", error);
-
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "system",
-          content: `Request failed: ${error.message}`,
-        },
-      ]);
-    } finally {
-      setBusy(false);
-      inputRef.current?.focus();
-    }
+    window.speechSynthesis.speak(
+      utterance
+    );
   }
+
+  /*
+  Stop speech.
+  */
+
+  function stopSpeaking() {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    setSpeaking(false);
+  }
+
+  /*
+  Handle AI actions.
+  */
 
   function handleAction(action) {
     if (!action) return;
 
-    if (action.type === "open_url" && action.url) {
-      const success = openUrl(action.url);
+    if (
+      action.type === "open_url" &&
+      action.url
+    ) {
+      const success = openUrl(
+        action.url
+      );
 
       if (!success) {
         setMessages((previous) => [
@@ -490,58 +683,411 @@ export default function App() {
     }
   }
 
-  function startVoice() {
-    if (!speechSupported || busy || listening) return;
+  /*
+  SEND
+  */
+
+  async function handleSend(
+    event,
+    voiceText = null
+  ) {
+    if (event) {
+      event.preventDefault();
+    }
+
+    const text = (
+      voiceText !== null
+        ? voiceText
+        : input
+    ).trim();
+
+    if (!text || busy) {
+      return;
+    }
+
+    setInput("");
+
+    setMessages((previous) => [
+      ...previous,
+      {
+        role: "user",
+        content: text,
+      },
+    ]);
+
+    /*
+    IMPORTANT:
+    Local commands are handled here,
+    so they NEVER consume an LLM request.
+    */
+
+    const localResult =
+      runLocalCommand(text);
+
+    if (localResult) {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content:
+            localResult.reply,
+        },
+      ]);
+
+      speak(localResult.reply);
+
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const data =
+        await sendToBackend(text);
+
+      /*
+      Browser actions.
+      */
+
+      if (data.action) {
+        handleAction(data.action);
+      }
+
+      if (
+        Array.isArray(data.actions)
+      ) {
+        data.actions.forEach(
+          handleAction
+        );
+      }
+
+      /*
+      Add AI response.
+      */
+
+      const reply =
+        data.reply ||
+        "I received your request but didn't get a response.";
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: reply,
+          provider:
+            data.provider,
+          model:
+            data.model,
+        },
+      ]);
+
+      /*
+      Speak response while keeping
+      text visible.
+      */
+
+      if (voiceEnabled) {
+        speak(reply);
+      }
+
+      /*
+      Tell user if fallback happened.
+      */
+
+      if (data.switched) {
+        setMessages((previous) => [
+          ...previous,
+          {
+            role: "system",
+            content:
+              `The previous model was unavailable, so I automatically switched to ${data.provider}/${data.model}.`,
+          },
+        ]);
+      }
+
+      await loadData();
+    } catch (error) {
+      console.error(
+        "Chat error:",
+        error
+      );
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "system",
+          content:
+            `Request failed: ${error.message}`,
+        },
+      ]);
+
+      /*
+      In continuous mode, allow the
+      user to speak again after an error.
+      */
+
+      if (
+        continuousVoiceRef.current
+      ) {
+        setTimeout(() => {
+          startVoiceRecognition();
+        }, 700);
+      }
+    } finally {
+      setBusy(false);
+
+      inputRef.current?.focus();
+    }
+  }
+
+  /*
+  Start microphone recognition.
+  */
+
+  function startVoiceRecognition() {
+    if (
+      !speechSupported ||
+      busyRef.current
+    ) {
+      return;
+    }
+
+    /*
+    Don't create multiple recognition
+    sessions.
+    */
+
+    if (listening) {
+      return;
+    }
 
     const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition;
 
-    const recognition = new SpeechRecognition();
+    if (!SpeechRecognition) {
+      return;
+    }
+
+    /*
+    Stop previous instance.
+    */
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+
+    const recognition =
+      new SpeechRecognition();
 
     recognition.continuous = false;
-    recognition.interimResults = false;
+
+    recognition.interimResults =
+      false;
+
     recognition.lang = "en-US";
+
+    recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
       setListening(true);
     };
 
-    recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+    recognition.onresult = (
+      event
+    ) => {
+      const transcript =
+        event.results?.[0]?.[0]?.transcript?.trim();
 
-      if (transcript) {
-        setInput(transcript);
-
-        setTimeout(() => {
-          handleSend();
-        }, 50);
+      if (!transcript) {
+        return;
       }
+
+      /*
+      Display recognized text.
+      */
+
+      setInput(transcript);
+
+      /*
+      Send exactly ONE request.
+      */
+
+      setTimeout(() => {
+        handleSend(
+          null,
+          transcript
+        );
+      }, 100);
     };
 
-    recognition.onerror = (event) => {
-      console.error("Speech recognition:", event.error);
+    recognition.onerror = (
+      event
+    ) => {
+      console.error(
+        "Speech recognition error:",
+        event.error
+      );
+
       setListening(false);
+
+      if (
+        event.error ===
+          "not-allowed" ||
+        event.error ===
+          "service-not-allowed"
+      ) {
+        setContinuousVoice(false);
+        continuousVoiceRef.current =
+          false;
+      }
     };
 
     recognition.onend = () => {
       setListening(false);
+
+      /*
+      We intentionally DON'T immediately
+      restart here after a transcript.
+
+      handleSend() → AI response →
+      speak() → speak.onend →
+      startVoiceRecognition()
+
+      This prevents overlapping
+      microphone/AI operations.
+      */
+
+      if (
+        continuousVoiceRef.current &&
+        !busyRef.current &&
+        !speaking &&
+        !input.trim()
+      ) {
+        /*
+        Small safety restart for cases
+        where recognition ended without
+        producing speech.
+        */
+
+        setTimeout(() => {
+          if (
+            continuousVoiceRef.current &&
+            !busyRef.current &&
+            !listening
+          ) {
+            startVoiceRecognition();
+          }
+        }, 700);
+      }
     };
 
-    recognitionRef.current = recognition;
+    recognitionRef.current =
+      recognition;
 
     try {
       recognition.start();
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Unable to start recognition:",
+        error
+      );
+
       setListening(false);
     }
   }
 
+  /*
+  Stop microphone.
+  */
+
+  function stopVoiceRecognition() {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+
+    recognitionRef.current =
+      null;
+
+    setListening(false);
+  }
+
+  /*
+  Toggle continuous voice mode.
+  */
+
+  function toggleContinuousVoice() {
+    if (!speechSupported) {
+      return;
+    }
+
+    if (
+      continuousVoice ||
+      listening
+    ) {
+      setContinuousVoice(false);
+
+      continuousVoiceRef.current =
+        false;
+
+      stopVoiceRecognition();
+
+      stopSpeaking();
+
+      return;
+    }
+
+    setContinuousVoice(true);
+
+    continuousVoiceRef.current =
+      true;
+
+    startVoiceRecognition();
+  }
+
+  /*
+  Tap-to-talk.
+  */
+
+  function tapToTalk() {
+    if (!speechSupported || busy) {
+      return;
+    }
+
+    /*
+    If continuous mode is active,
+    tap stops it.
+    */
+
+    if (continuousVoice) {
+      toggleContinuousVoice();
+      return;
+    }
+
+    if (listening) {
+      stopVoiceRecognition();
+      return;
+    }
+
+    startVoiceRecognition();
+  }
+
+  /*
+  Clear conversation.
+  */
+
   async function clearConversation() {
     try {
-      await fetch(`${getApiBase()}/api/conversation/clear`, {
-        method: "POST",
-      });
+      await fetch(
+        `${getApiBase()}/api/conversation/clear`,
+        {
+          method: "POST",
+        }
+      );
     } catch (error) {
       console.error(error);
     }
@@ -549,57 +1095,102 @@ export default function App() {
     setMessages([
       {
         role: "assistant",
-        content: "Conversation cleared. What shall we do next?",
+        content:
+          "Conversation cleared. What shall we do next?",
       },
     ]);
   }
 
+  /*
+  Delete note.
+  */
+
   async function deleteNote(id) {
     try {
-      const response = await fetch(`${getApiBase()}/api/notes/${id}`, {
-        method: "DELETE",
-      });
+      const response =
+        await fetch(
+          `${getApiBase()}/api/notes/${id}`,
+          {
+            method: "DELETE",
+          }
+        );
 
-      const data = await response.json();
+      const data =
+        await response.json();
+
       setNotes(data.notes || []);
     } catch (error) {
       console.error(error);
     }
   }
 
+  /*
+  Delete reminder.
+  */
+
   async function deleteReminder(id) {
     try {
-      const response = await fetch(`${getApiBase()}/api/reminders/${id}`, {
-        method: "DELETE",
-      });
+      const response =
+        await fetch(
+          `${getApiBase()}/api/reminders/${id}`,
+          {
+            method: "DELETE",
+          }
+        );
 
-      const data = await response.json();
-      setReminders(data.reminders || []);
+      const data =
+        await response.json();
+
+      setReminders(
+        data.reminders || []
+      );
     } catch (error) {
       console.error(error);
     }
   }
 
+  /*
+  Delete memory.
+  */
+
   async function deleteMemory(id) {
     try {
-      const response = await fetch(`${getApiBase()}/api/memory/${id}`, {
-        method: "DELETE",
-      });
+      const response =
+        await fetch(
+          `${getApiBase()}/api/memory/${id}`,
+          {
+            method: "DELETE",
+          }
+        );
 
-      const data = await response.json();
+      const data =
+        await response.json();
+
       setMemory(data.facts || []);
     } catch (error) {
       console.error(error);
     }
   }
 
+  /*
+  Save backend URL.
+  */
+
   function saveSettings() {
-    const clean = serverUrl.trim().replace(/\/+$/, "");
+    const clean =
+      serverUrl
+        .trim()
+        .replace(/\/+$/, "");
 
     if (clean) {
-      localStorage.setItem(API_KEY, clean);
+      localStorage.setItem(
+        API_STORAGE_KEY,
+        clean
+      );
     } else {
-      localStorage.removeItem(API_KEY);
+      localStorage.removeItem(
+        API_STORAGE_KEY
+      );
     }
 
     setSettingsOpen(false);
@@ -612,11 +1203,17 @@ export default function App() {
 
   return (
     <div className="aria-app">
+      {/* TOP BAR */}
+
       <header className="topbar">
         <div className="brand-area">
           <button
             className="mobile-menu-button"
-            onClick={() => setSidebarOpen((value) => !value)}
+            onClick={() =>
+              setSidebarOpen(
+                (value) => !value
+              )
+            }
           >
             ☰
           </button>
@@ -626,71 +1223,117 @@ export default function App() {
           </div>
 
           <div>
-            <div className="brand-title">ARIA</div>
-            <div className="brand-subtitle">AI VOICE COMPANION</div>
+            <div className="brand-title">
+              ARIA
+            </div>
+
+            <div className="brand-subtitle">
+              AI VOICE COMPANION
+            </div>
           </div>
         </div>
 
         <div className="topbar-right">
-          <div className={`connection ${connected ? "online" : "offline"}`}>
+          <div
+            className={`connection ${
+              connected
+                ? "online"
+                : "offline"
+            }`}
+          >
             <span className="connection-dot" />
-            {connected ? "Connected" : "Offline"}
+
+            {connected
+              ? "Connected"
+              : "Offline"}
           </div>
 
           <button
             className="icon-button"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
+            onClick={() =>
+              setSettingsOpen(true)
+            }
           >
             ⚙
           </button>
         </div>
       </header>
 
+      {/* BODY */}
+
       <div className="app-body">
-        <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+        {/* SIDEBAR */}
+
+        <aside
+          className={`sidebar ${
+            sidebarOpen ? "open" : ""
+          }`}
+        >
           <button
             className="new-chat"
-            onClick={clearConversation}
+            onClick={() => {
+              clearConversation();
+              setSidebarOpen(false);
+            }}
           >
             <span>＋</span>
             New conversation
           </button>
 
           <div className="sidebar-section">
-            <div className="sidebar-heading">Workspace</div>
+            <div className="sidebar-heading">
+              Workspace
+            </div>
 
             <button
               className={`sidebar-item ${
-                panel === "reminders" ? "active" : ""
+                panel === "reminders"
+                  ? "active"
+                  : ""
               }`}
-              onClick={() => setPanel("reminders")}
+              onClick={() =>
+                setPanel("reminders")
+              }
             >
               <span>⏰</span>
               Reminders
-              <span className="count">{reminders.length}</span>
+              <span className="count">
+                {reminders.length}
+              </span>
             </button>
 
             <button
               className={`sidebar-item ${
-                panel === "notes" ? "active" : ""
+                panel === "notes"
+                  ? "active"
+                  : ""
               }`}
-              onClick={() => setPanel("notes")}
+              onClick={() =>
+                setPanel("notes")
+              }
             >
               <span>📝</span>
               Notes
-              <span className="count">{notes.length}</span>
+              <span className="count">
+                {notes.length}
+              </span>
             </button>
 
             <button
               className={`sidebar-item ${
-                panel === "memory" ? "active" : ""
+                panel === "memory"
+                  ? "active"
+                  : ""
               }`}
-              onClick={() => setPanel("memory")}
+              onClick={() =>
+                setPanel("memory")
+              }
             >
               <span>🧠</span>
               Memory
-              <span className="count">{memory.length}</span>
+              <span className="count">
+                {memory.length}
+              </span>
             </button>
           </div>
 
@@ -701,34 +1344,50 @@ export default function App() {
               </div>
 
               <div className="model-status-value">
-                {health?.lastUsed || "Waiting for request"}
+                {health?.lastUsed ||
+                  "Waiting for request"}
               </div>
 
               <div className="model-status-small">
-                {health?.configuredProviders?.length || 0} provider(s)
-                configured
+                {health
+                  ?.configuredProviders
+                  ?.length || 0}{" "}
+                provider(s) configured
               </div>
             </div>
 
             <button
               className="sidebar-clear"
-              onClick={clearConversation}
+              onClick={
+                clearConversation
+              }
             >
               Clear conversation
             </button>
           </div>
         </aside>
 
+        {/* MAIN */}
+
         <main className="main-area">
+          {/* CHAT */}
+
           <section className="chat-section">
             <div className="chat-header">
               <div>
-                <h2>Conversation</h2>
+                <h2>
+                  Conversation
+                </h2>
+
                 <p>
                   {busy
                     ? "Aria is thinking..."
                     : listening
                     ? "Listening..."
+                    : speaking
+                    ? "Speaking..."
+                    : continuousVoice
+                    ? "Voice mode active"
                     : "Ready when you are"}
                 </p>
               </div>
@@ -736,30 +1395,45 @@ export default function App() {
               <div className="chat-state">
                 <span
                   className={`state-dot ${
-                    busy || listening ? "active" : ""
+                    busy ||
+                    listening ||
+                    speaking
+                      ? "active"
+                      : ""
                   }`}
                 />
+
                 {busy
                   ? "Thinking"
                   : listening
                   ? "Listening"
+                  : speaking
+                  ? "Speaking"
+                  : continuousVoice
+                  ? "Voice"
                   : "Ready"}
               </div>
             </div>
 
+            {/* MESSAGES */}
+
             <div className="messages-container">
               <div className="messages">
-                {messages.map((message, index) => (
-                  <Message
-                    key={`${index}-${message.role}`}
-                    message={message}
-                  />
-                ))}
+                {messages.map(
+                  (message, index) => (
+                    <Message
+                      key={`${index}-${message.role}`}
+                      message={message}
+                    />
+                  )
+                )}
 
                 {busy && (
                   <div className="message-row assistant-row">
                     <div className="message assistant-message thinking-message">
-                      <div className="message-label">ARIA</div>
+                      <div className="message-label">
+                        ARIA
+                      </div>
 
                       <div className="thinking-dots">
                         <span />
@@ -770,35 +1444,63 @@ export default function App() {
                   </div>
                 )}
 
-                <div ref={messagesEndRef} />
+                <div
+                  ref={messagesEndRef}
+                />
               </div>
             </div>
 
+            {/* COMPOSER */}
+
             <div className="composer-area">
-              <form className="composer" onSubmit={handleSend}>
+              <form
+                className="composer"
+                onSubmit={handleSend}
+              >
                 <button
                   type="button"
                   className={`voice-button ${
-                    listening ? "listening" : ""
+                    listening
+                      ? "listening"
+                      : ""
+                  } ${
+                    continuousVoice
+                      ? "continuous"
+                      : ""
                   }`}
-                  onClick={startVoice}
-                  disabled={!speechSupported || busy}
+                  onClick={
+                    tapToTalk
+                  }
+                  disabled={
+                    !speechSupported ||
+                    busy
+                  }
                   title={
-                    speechSupported
-                      ? "Voice input"
-                      : "Voice input is not supported"
+                    continuousVoice
+                      ? "Stop voice mode"
+                      : "Tap to speak"
                   }
                 >
-                  {listening ? "●" : "🎙"}
+                  {listening
+                    ? "●"
+                    : "🎙"}
                 </button>
 
                 <input
                   ref={inputRef}
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={(event) =>
+                    setInput(
+                      event.target.value
+                    )
+                  }
                   placeholder={
-                    busy
+                    listening
+                      ? "Listening..."
+                      : busy
                       ? "Aria is thinking..."
+                      : continuousVoice
+                      ? "Speak naturally..."
                       : "Message Aria..."
                   }
                   disabled={busy}
@@ -808,38 +1510,90 @@ export default function App() {
                 <button
                   type="submit"
                   className="send-button"
-                  disabled={!input.trim() || busy}
+                  disabled={
+                    !input.trim() ||
+                    busy
+                  }
                 >
                   ➤
                 </button>
               </form>
 
               <div className="composer-footer">
-                <span>
-                  {speechSupported
-                    ? "Voice input available"
-                    : "Text input"}
-                </span>
+                <div className="voice-controls">
+                  <button
+                    className={`voice-toggle ${
+                      continuousVoice
+                        ? "enabled"
+                        : ""
+                    }`}
+                    onClick={
+                      toggleContinuousVoice
+                    }
+                    disabled={
+                      !speechSupported
+                    }
+                  >
+                    {continuousVoice
+                      ? "🎙 Continuous voice"
+                      : "🎙 Voice mode"}
+                  </button>
 
-                <button
-                  className={`voice-toggle ${
-                    voiceEnabled ? "enabled" : ""
-                  }`}
-                  onClick={() =>
-                    setVoiceEnabled((value) => !value)
-                  }
-                >
-                  {voiceEnabled ? "🔊 Voice on" : "🔇 Voice off"}
-                </button>
+                  <button
+                    className={`voice-toggle ${
+                      voiceEnabled
+                        ? "enabled"
+                        : ""
+                    }`}
+                    onClick={() => {
+                      setVoiceEnabled(
+                        (value) =>
+                          !value
+                      );
+
+                      if (
+                        voiceEnabled
+                      ) {
+                        stopSpeaking();
+                      }
+                    }}
+                  >
+                    {voiceEnabled
+                      ? "🔊 Speak responses"
+                      : "🔇 Text only"}
+                  </button>
+
+                  {speaking && (
+                    <button
+                      className="voice-stop"
+                      onClick={
+                        stopSpeaking
+                      }
+                    >
+                      Stop speaking
+                    </button>
+                  )}
+                </div>
+
+                <span className="voice-hint">
+                  {speechSupported
+                    ? continuousVoice
+                      ? "Aria listens after each response"
+                      : "Tap 🎙 to speak"
+                    : "Voice input is not supported by this browser"}
+                </span>
               </div>
             </div>
           </section>
+
+          {/* RIGHT PANEL */}
 
           <aside className="right-panel">
             <div className="right-panel-header">
               <div>
                 <h3>
-                  {panel === "reminders"
+                  {panel ===
+                  "reminders"
                     ? "Reminders"
                     : panel === "notes"
                     ? "Notes"
@@ -847,7 +1601,8 @@ export default function App() {
                 </h3>
 
                 <span>
-                  {panel === "reminders"
+                  {panel ===
+                  "reminders"
                     ? `${reminders.length} active`
                     : panel === "notes"
                     ? `${notes.length} saved`
@@ -857,128 +1612,191 @@ export default function App() {
             </div>
 
             <div className="right-panel-content">
-              {panel === "reminders" && (
+              {/* REMINDERS */}
+
+              {panel ===
+                "reminders" && (
                 <>
-                  {reminders.length === 0 ? (
+                  {reminders.length ===
+                  0 ? (
                     <div className="empty-state">
                       <div>⏰</div>
-                      <strong>No reminders</strong>
+
+                      <strong>
+                        No reminders
+                      </strong>
+
                       <span>
-                        Tell Aria something like
+                        Tell Aria:
                         <br />
                         "remind me in 20 minutes"
                       </span>
                     </div>
                   ) : (
-                    reminders.map((reminder) => (
-                      <div
-                        className="data-card"
-                        key={reminder._id || reminder.id}
-                      >
-                        <div className="data-icon">⏰</div>
-
-                        <div className="data-main">
-                          <strong>{reminder.text}</strong>
-                          <span>
-                            {new Date(
-                              reminder.dueAt
-                            ).toLocaleString()}
-                          </span>
-                        </div>
-
-                        <button
-                          onClick={() =>
-                            deleteReminder(
-                              reminder._id || reminder.id
-                            )
+                    reminders.map(
+                      (reminder) => (
+                        <div
+                          className="data-card"
+                          key={
+                            reminder._id ||
+                            reminder.id
                           }
                         >
-                          ×
-                        </button>
-                      </div>
-                    ))
+                          <div className="data-icon">
+                            ⏰
+                          </div>
+
+                          <div className="data-main">
+                            <strong>
+                              {
+                                reminder.text
+                              }
+                            </strong>
+
+                            <span>
+                              {new Date(
+                                reminder.dueAt
+                              ).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() =>
+                              deleteReminder(
+                                reminder._id ||
+                                  reminder.id
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )
+                    )
                   )}
                 </>
               )}
+
+              {/* NOTES */}
 
               {panel === "notes" && (
                 <>
-                  {notes.length === 0 ? (
+                  {notes.length ===
+                  0 ? (
                     <div className="empty-state">
                       <div>📝</div>
-                      <strong>No notes</strong>
+
+                      <strong>
+                        No notes
+                      </strong>
+
                       <span>
-                        Tell Aria "take a note that..."
+                        Tell Aria:
+                        <br />
+                        "take a note that..."
                       </span>
                     </div>
                   ) : (
-                    notes.map((note) => (
-                      <div
-                        className="data-card"
-                        key={note._id || note.id}
-                      >
-                        <div className="data-icon">📝</div>
-
-                        <div className="data-main">
-                          <strong>{note.text}</strong>
-                          <span>
-                            {new Date(
-                              note.createdAt
-                            ).toLocaleString()}
-                          </span>
-                        </div>
-
-                        <button
-                          onClick={() =>
-                            deleteNote(note._id || note.id)
+                    notes.map(
+                      (note) => (
+                        <div
+                          className="data-card"
+                          key={
+                            note._id ||
+                            note.id
                           }
                         >
-                          ×
-                        </button>
-                      </div>
-                    ))
+                          <div className="data-icon">
+                            📝
+                          </div>
+
+                          <div className="data-main">
+                            <strong>
+                              {note.text}
+                            </strong>
+
+                            <span>
+                              {new Date(
+                                note.createdAt
+                              ).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() =>
+                              deleteNote(
+                                note._id ||
+                                  note.id
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )
+                    )
                   )}
                 </>
               )}
 
+              {/* MEMORY */}
+
               {panel === "memory" && (
                 <>
-                  {memory.length === 0 ? (
+                  {memory.length ===
+                  0 ? (
                     <div className="empty-state">
                       <div>🧠</div>
-                      <strong>No memories</strong>
+
+                      <strong>
+                        No memories
+                      </strong>
+
                       <span>
-                        Tell Aria "remember that..."
+                        Tell Aria:
+                        <br />
+                        "remember that..."
                       </span>
                     </div>
                   ) : (
-                    memory.map((fact) => (
-                      <div
-                        className="data-card"
-                        key={fact._id || fact.id}
-                      >
-                        <div className="data-icon">🧠</div>
-
-                        <div className="data-main">
-                          <strong>{fact.fact}</strong>
-                          <span>
-                            {new Date(
-                              fact.createdAt
-                            ).toLocaleString()}
-                          </span>
-                        </div>
-
-                        <button
-                          onClick={() =>
-                            deleteMemory(
-                              fact._id || fact.id
-                            )
+                    memory.map(
+                      (fact) => (
+                        <div
+                          className="data-card"
+                          key={
+                            fact._id ||
+                            fact.id
                           }
                         >
-                          ×
-                        </button>
-                      </div>
-                    ))
+                          <div className="data-icon">
+                            🧠
+                          </div>
+
+                          <div className="data-main">
+                            <strong>
+                              {fact.fact}
+                            </strong>
+
+                            <span>
+                              {new Date(
+                                fact.createdAt
+                              ).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() =>
+                              deleteMemory(
+                                fact._id ||
+                                  fact.id
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )
+                    )
                   )}
                 </>
               )}
@@ -987,52 +1805,76 @@ export default function App() {
         </main>
       </div>
 
+      {/* SETTINGS */}
+
       {settingsOpen && (
         <div
           className="modal-overlay"
-          onClick={() => setSettingsOpen(false)}
+          onClick={() =>
+            setSettingsOpen(false)
+          }
         >
           <div
             className="settings-modal"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) =>
+              event.stopPropagation()
+            }
           >
             <div className="modal-header">
               <div>
-                <h3>Connection settings</h3>
-                <p>Configure your Aria backend URL.</p>
+                <h3>
+                  Connection settings
+                </h3>
+
+                <p>
+                  Configure your Aria
+                  backend URL.
+                </p>
               </div>
 
-              <button onClick={() => setSettingsOpen(false)}>
+              <button
+                onClick={() =>
+                  setSettingsOpen(false)
+                }
+              >
                 ×
               </button>
             </div>
 
-            <label>Backend URL</label>
+            <label>
+              Backend URL
+            </label>
 
             <input
               value={serverUrl}
               onChange={(event) =>
-                setServerUrl(event.target.value)
+                setServerUrl(
+                  event.target.value
+                )
               }
               placeholder="https://your-server.onrender.com"
             />
 
             <div className="modal-help">
-              Your Vercel deployment should normally use the
-              VITE_API_URL environment variable.
+              Normally this should be
+              your VITE_API_URL value.
             </div>
 
             <div className="modal-actions">
               <button
                 className="secondary-button"
-                onClick={() => setSettingsOpen(false)}
+                onClick={() =>
+                  setSettingsOpen(false)
+                }
               >
                 Cancel
               </button>
 
               <button
                 className="primary-button"
-                onClick={saveSettings}
+                onClick={
+                  saveSettings
+                }
               >
                 Save & reconnect
               </button>
