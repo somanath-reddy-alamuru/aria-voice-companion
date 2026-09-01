@@ -16,7 +16,6 @@ function getApiBase() {
 
 const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
 
-// Cleans symbols, emojis, and code blocks so TTS speaks naturally
 function cleanTextForSpeech(text) {
   if (!text) return "";
   let cleaned = text;
@@ -47,6 +46,7 @@ export default function App() {
   const [panelTab, setPanelTab] = useState("chats");
   
   const chatEndRef = useRef(null);
+  const googleBtnRef = useRef(null);
   const voiceOnRef = useRef(true);
   const busyRef = useRef(false);
 
@@ -71,6 +71,47 @@ export default function App() {
     }
   }, [token]);
 
+  // Initialize Google Sign-In SDK Button
+  useEffect(() => {
+    if (!user && window.google) {
+      try {
+        window.google.accounts.id.initialize({
+          client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com", // Replace with your Google OAuth Client ID if desired, or let it prompt
+          callback: handleGoogleResponse,
+        });
+        if (googleBtnRef.current) {
+          window.google.accounts.id.renderButton(googleBtnRef.current, {
+            theme: "outline",
+            size: "large",
+            width: "100%",
+          });
+        }
+      } catch (e) {
+        console.warn("Google SDK failed to load:", e);
+      }
+    }
+  }, [user, authMode]);
+
+  async function handleGoogleResponse(response) {
+    setAuthError("");
+    try {
+      const res = await fetch(`${getApiBase()}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: response.credential })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Google authentication failed");
+      
+      localStorage.setItem(TOKEN_KEY, data.token);
+      setToken(data.token);
+      setUser(data.user);
+      loadSessions();
+    } catch (err) {
+      setAuthError(err.message);
+    }
+  }
+
   function logout() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
@@ -90,28 +131,6 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Authentication failed");
       
-      localStorage.setItem(TOKEN_KEY, data.token);
-      setToken(data.token);
-      setUser(data.user);
-      loadSessions();
-    } catch (err) {
-      setAuthError(err.message);
-    }
-  }
-
-  async function handleGoogleLogin() {
-    const fakeEmail = prompt("Enter Google Account Email:");
-    const fakeName = prompt("Enter Your Name:");
-    if (!fakeEmail || !fakeName) return;
-
-    try {
-      const res = await fetch(`${getApiBase()}/api/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: fakeEmail, name: fakeName })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       localStorage.setItem(TOKEN_KEY, data.token);
       setToken(data.token);
       setUser(data.user);
@@ -169,7 +188,7 @@ export default function App() {
     const u = new SpeechSynthesisUtterance(spokenText);
     
     u.onstart = () => setState("speaking");
-    u.onend = () => setState("idle"); // Returns to idle for manual push-to-talk
+    u.onend = () => setState("idle");
     u.onerror = () => setState("idle");
     window.speechSynthesis.speak(u);
   }
@@ -239,9 +258,8 @@ export default function App() {
               {authMode === "login" ? "Sign In" : "Register"}
             </button>
             
-            <button type="button" className="google-btn" onClick={handleGoogleLogin}>
-              Sign in with Google
-            </button>
+            {/* Real Google Sign In Button Container */}
+            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center', marginBottom: '14px', width: '100%' }}></div>
 
             <p className="auth-switch" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
               {authMode === "login" ? "Need an account? Register" : "Already have an account? Sign In"}

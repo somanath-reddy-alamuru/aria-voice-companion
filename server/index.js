@@ -44,7 +44,7 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-// FULL 10+ PROVIDERS & MODELS FAILOVER POOL
+// Multi-provider AI Failover Pool
 const PROVIDERS = [
   {
     id: "groq",
@@ -58,15 +58,14 @@ const PROVIDERS = [
     envKey: "CEREBRAS_API_KEY",
     kind: "openai-compatible",
     baseUrl: "https://api.cerebras.ai/v1/chat/completions",
-    models: ["llama-3.3-70b", "gpt-oss-120b"],
+    models: ["llama-3.3-70b"],
   },
   {
     id: "openrouter",
     envKey: "OPENROUTER_API_KEY",
     kind: "openai-compatible",
     baseUrl: "https://openrouter.ai/api/v1/chat/completions",
-    extraHeaders: { "HTTP-Referer": "https://aria-ai.app", "X-Title": "Aria AI" },
-    models: ["meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen3-coder:free"],
+    models: ["meta-llama/llama-3.3-70b-instruct:free"],
   },
   {
     id: "gemini",
@@ -80,13 +79,6 @@ const PROVIDERS = [
     kind: "openai-compatible",
     baseUrl: "https://api.openai.com/v1/chat/completions",
     models: ["gpt-4o-mini", "gpt-4o"],
-  },
-  {
-    id: "xai",
-    envKey: "XAI_API_KEY",
-    kind: "openai-compatible",
-    baseUrl: "https://api.x.ai/v1/chat/completions",
-    models: ["grok-4-fast", "grok-3"],
   },
 ].filter((p) => process.env[p.envKey]);
 
@@ -103,7 +95,6 @@ async function callOpenAICompatible(provider, model, messages) {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env[provider.envKey]}`,
-      ...(provider.extraHeaders || {}),
     },
     body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: 1200, temperature: 0.7 }),
   });
@@ -131,24 +122,23 @@ async function callGemini(provider, model, messages) {
   return { content: text, tool_calls: [] };
 }
 
-// FAILOVER ROTATION LOGIC: Iterates through all providers/models. If one hits rate limit (429) or fails, it instantly switches to the next.
 async function callAI(messages) {
   for (const provider of PROVIDERS) {
     for (const model of provider.models) {
       try {
         const message = provider.kind === "gemini" ? await callGemini(provider, model, messages) : await callOpenAICompatible(provider, model, messages);
         return { message, providerId: provider.id, model };
-      } catch (err) {
-        console.warn(`[ai] ${provider.id}/${model} failed (${err.message}), trying next model...`);
+      } catch {
+        // try next model
       }
     }
   }
-  throw new Error("All configured AI providers and models failed.");
+  throw new Error("All configured AI models failed.");
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, activeProviders: PROVIDERS.map(p => p.id), db: mongoose.connection.readyState === 1 }));
+app.get("/health", (req, res) => res.json({ ok: true, db: mongoose.connection.readyState === 1 }));
 
-// Auth Routes
+// Email/Password Register
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -167,6 +157,7 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
+// Email/Password Login
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -182,14 +173,30 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// Enhanced Google Auth Verification Route
 app.post("/api/auth/google", async (req, res) => {
   try {
-    const { email, name, avatar } = req.body;
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: "Google credential token required" });
+
+    // Verify Google ID token securely via Google's official tokeninfo endpoint
+    const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+    if (!googleRes.ok) return res.status(401).json({ error: "Invalid Google authentication token" });
+    
+    const googleData = await googleRes.json();
+    const { email, name, picture } = googleData;
+
     let user = await User.findOne({ email });
     if (!user) {
       const dummyHash = await bcrypt.hash(Math.random().toString(), 10);
-      user = await User.create({ email, passwordHash: dummyHash, name, avatar: avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}` });
+      user = await User.create({ 
+        email, 
+        passwordHash: dummyHash, 
+        name: name || email.split("@")[0], 
+        avatar: picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${email}` 
+      });
     }
+
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, user: { id: user._id, email: user.email, name: user.name, avatar: user.avatar } });
   } catch (err) {
@@ -201,7 +208,7 @@ app.get("/api/auth/me", authenticateToken, (req, res) => {
   res.json({ user: { id: req.user._id, email: req.user.email, name: req.user.name, avatar: req.user.avatar } });
 });
 
-// Scoped Data Routes
+// Scoped Sessions & Chat
 app.get("/api/sessions", authenticateToken, async (req, res) => {
   const sessions = await Session.find({ userId: req.user._id }).select("title updatedAt").sort("-updatedAt");
   res.json(sessions);
